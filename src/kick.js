@@ -9,6 +9,7 @@ const EVENTS = [
   'channel.subscription.renewal',
   'channel.subscription.gifts',
   'kicks.gifted',
+  'channel.reward.redemption.updated',
 ];
 /** Refresh a token this long before it expires. */
 const EXPIRY_MARGIN_MS = 60_000;
@@ -26,12 +27,14 @@ export function newPkce() {
  * Why Kick said no, safe to log: its status, and its error's name if it looks like one. Never the
  * whole answer, which could hold a token. A block page in front of Kick shows up as `text/html`.
  */
+export const safeName = (value) => (/^[\w .:'-]{1,80}$/.test(value ?? '') ? value : null);
+
 async function reasonOf(response) {
   const type = (response.headers.get('content-type') ?? 'unknown').split(';')[0];
   let name = null;
   try {
     const body = JSON.parse(await response.text());
-    name = [body.error, body.message].find((v) => /^[\w .:'-]{1,80}$/.test(v ?? '')) ?? null;
+    name = safeName(body.error) ?? safeName(body.message);
   } catch {
     // Not JSON: the type says enough.
   }
@@ -132,20 +135,28 @@ export class Kick {
     return { userId: user.user_id, name: user.name };
   }
 
-  /** Subscribing again is how Kick is told to deliver to this app. Returns what it created. */
+  /**
+   * Tells Kick to deliver to this app, and returns what it created. One at a time: an event that
+   * is refused must not cost the others, or the sign-in.
+   */
   async subscribe(access) {
-    const body = await this.#api('/public/v1/events/subscriptions', access, {
-      method: 'POST',
-      body: JSON.stringify({
-        events: EVENTS.map((name) => ({ name, version: 1 })),
-        method: 'webhook',
-      }),
-    });
-    const items = body.data ?? [];
-    for (const item of items.filter((i) => i.error)) {
-      console.error(`kick refused the event ${item.name}`);
+    const ids = [];
+    for (const name of EVENTS) {
+      try {
+        const body = await this.#api('/public/v1/events/subscriptions', access, {
+          method: 'POST',
+          body: JSON.stringify({ events: [{ name, version: 1 }], method: 'webhook' }),
+        });
+        const item = body.data?.[0];
+        if (item?.subscription_id && !item.error) ids.push(item.subscription_id);
+        else console.error(`kick refused the event ${name}: ${safeName(item?.error) ?? 'unknown'}`);
+      } catch (error) {
+        if (!(error instanceof KickError)) throw error;
+        console.error(`kick refused the event ${name}: ${error.message}`);
+      }
     }
-    return items.filter((item) => !item.error).map((item) => item.subscription_id);
+    console.log(`kick subscribed to ${ids.length} of ${EVENTS.length} events`);
+    return ids;
   }
 
   async unsubscribe(access, ids) {
@@ -224,6 +235,14 @@ export function toFrame(type, id, event) {
       return alert('gift', event.sender, {
         amount: event.gift?.amount != null ? `${event.gift.amount} KICKs` : null,
         message: event.gift?.message || null,
+      });
+    case 'channel.reward.redemption.updated':
+      // Pending, then accepted, or accepted at once: the same id makes it one alert in the app.
+      if (event.status === 'rejected') return null;
+      return alert('reward', event.redeemer, {
+        id: `reward-${event.id}`,
+        amount: event.reward?.title ?? null,
+        message: event.user_input || null,
       });
     default:
       return null;

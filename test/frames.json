@@ -41,6 +41,16 @@
     "count": 5,
     "message": null
   },
+  "reward": {
+    "platform": "kick",
+    "kind": "alert",
+    "id": "reward-r1",
+    "event": "reward",
+    "user": "Ana",
+    "amount": "Hydrate",
+    "count": null,
+    "message": "agua"
+  },
   "status": { "platform": "tiktok", "kind": "status", "live": false },
   "ping": { "kind": "ping" }
 }

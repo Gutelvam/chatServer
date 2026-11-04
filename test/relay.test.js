@@ -26,7 +26,7 @@ function sign(id, timestamp, body) {
 }
 
 /** What Kick was asked, and how it answers. */
-const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, expiresIn: 3600, user: 7 };
+const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7 };
 let fakeServer;
 let fakeBase;
 let dir;
@@ -71,6 +71,7 @@ before(async () => {
         });
       }
       if (path === '/public/v1/events/subscriptions' && request.method === 'POST') {
+        if (JSON.parse(body).events[0].name === fake.refuseEvent) return json(403, {});
         return json(200, {
           data: JSON.parse(body).events.map((e, i) => ({ name: e.name, subscription_id: `s${i}` })),
         });
@@ -119,6 +120,7 @@ afterEach(async () => {
     tokenStatus: 200,
     tokenBody: {},
     usersStatus: 200,
+    refuseEvent: null,
     expiresIn: 3600,
     user: 7,
   });
@@ -276,6 +278,55 @@ test('a failed sign-in logs which step failed and why, and nothing secret', asyn
   fake.usersStatus = 403;
   await backFromKick();
   assert.match(logged(), /\/public\/v1\/users: 403 text\/html/);
+});
+
+test('an event Kick refuses costs neither the others nor the sign-in', async (t) => {
+  await start();
+  const errors = t.mock.method(console, 'error', () => {});
+  t.mock.method(console, 'log', () => {});
+  fake.refuseEvent = 'channel.reward.redemption.updated';
+  const session = await signIn();
+  assert.ok(session);
+  const asked = fake.requests
+    .filter((r) => r.method === 'POST' && r.path.endsWith('subscriptions'))
+    .map((r) => JSON.parse(r.body).events[0].name);
+  assert.ok(asked.includes('channel.followed'));
+  assert.ok(asked.includes('channel.subscription.new'));
+  const logged = errors.mock.calls.map((call) => call.arguments.join(' ')).join('\n');
+  assert.match(logged, /refused the event channel\.reward\.redemption\.updated: .*403/);
+});
+
+test('follows reach the app and the log says so, without saying who', async (t) => {
+  await start();
+  const logs = t.mock.method(console, 'log', () => {});
+  const session = await signIn();
+  const { socket, got } = await connect(session);
+  await until('hello', () => got.length === 1);
+  await webhook('channel.followed', 'f1', {
+    broadcaster: { user_id: 7 },
+    follower: { username: 'Rui' },
+  });
+  await until('the follow', () => got.length === 2);
+  assert.equal(got[1].event, 'follow');
+  const logged = logs.mock.calls.map((call) => call.arguments.join(' ')).join('\n');
+  assert.match(logged, /webhook channel\.followed: 1 app/);
+  assert.ok(!logged.includes('Rui'));
+  socket.close();
+});
+
+test('a reward becomes one alert, and a rejected one none', () => {
+  const { platform: _, ...expected } = frames.reward;
+  const redeemed = (status) =>
+    kickFrame('channel.reward.redemption.updated', 'webhook-id', {
+      id: 'r1',
+      status,
+      redeemer: { username: 'Ana' },
+      reward: { title: 'Hydrate' },
+      user_input: 'agua',
+    });
+  assert.deepEqual(redeemed('pending'), expected);
+  assert.deepEqual(redeemed('accepted'), expected);
+  assert.equal(redeemed('rejected'), null);
 });
 
 test('a refresh Kick refuses asks the app to sign in again', async () => {

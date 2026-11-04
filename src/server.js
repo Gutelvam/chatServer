@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 
-import { KickError, newPkce, toFrame } from './kick.js';
+import { KickError, newPkce, safeName, toFrame } from './kick.js';
 import { newToken } from './store.js';
 import { cleanUsername } from './tiktok.js';
 
@@ -92,7 +92,9 @@ export function createRelay({ publicUrl, store, kick, rooms }) {
 
   const sendTo = (userId, frame) => {
     const text = JSON.stringify({ platform: 'kick', ...frame });
-    for (const socket of listeners.get(userId) ?? []) socket.send(text);
+    const group = listeners.get(userId) ?? new Set();
+    for (const socket of group) socket.send(text);
+    return group.size;
   };
 
   /** A token that works, refreshed once at a time per session: Kick's refresh tokens change. */
@@ -202,7 +204,10 @@ export function createRelay({ publicUrl, store, kick, rooms }) {
       if (seenOrder.length > REMEMBER_WEBHOOKS) seenWebhooks.delete(seenOrder.shift());
       const event = JSON.parse(body.toString('utf8'));
       const frame = toFrame(request.headers['kick-event-type'], id, event);
-      if (frame) sendTo(event.broadcaster?.user_id, frame);
+      const type = request.headers['kick-event-type'];
+      const reached = frame ? sendTo(event.broadcaster?.user_id, frame) : 0;
+      // Only the kind of event, to see what arrives. Chat would flood it, and says nothing new.
+      if (type !== 'chat.message.sent') console.log(`webhook ${safeName(type)}: ${reached} app(s)`);
     }
     reply(response, 200, {});
   };
