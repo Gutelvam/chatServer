@@ -26,7 +26,7 @@ function sign(id, timestamp, body) {
 }
 
 /** What Kick was asked, and how it answers. */
-const fake = { requests: [], tokenStatus: 200, expiresIn: 3600, user: 7 };
+const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, expiresIn: 3600, user: 7 };
 let fakeServer;
 let fakeBase;
 let dir;
@@ -53,13 +53,17 @@ before(async () => {
         response.end(JSON.stringify(value));
       };
       if (path === '/oauth/token') {
-        if (fake.tokenStatus !== 200) return json(fake.tokenStatus, {});
+        if (fake.tokenStatus !== 200) return json(fake.tokenStatus, fake.tokenBody);
         const refreshed = body.includes('grant_type=refresh_token');
         return json(200, {
           access_token: refreshed ? 'access-2' : 'access-1',
           refresh_token: refreshed ? 'refresh-2' : 'refresh-1',
           expires_in: fake.expiresIn,
         });
+      }
+      if (path === '/public/v1/users' && fake.usersStatus !== 200) {
+        response.writeHead(fake.usersStatus, { 'Content-Type': 'text/html' });
+        return response.end('<html>blocked</html>');
       }
       if (path === '/public/v1/users') {
         return json(200, {
@@ -110,7 +114,14 @@ afterEach(async () => {
   await relay?.close();
   relay = null;
   rmSync(dir, { recursive: true, force: true });
-  Object.assign(fake, { requests: [], tokenStatus: 200, expiresIn: 3600, user: 7 });
+  Object.assign(fake, {
+    requests: [],
+    tokenStatus: 200,
+    tokenBody: {},
+    usersStatus: 200,
+    expiresIn: 3600,
+    user: 7,
+  });
 });
 
 const noRedirect = (url) => fetch(url, { redirect: 'manual' });
@@ -242,6 +253,29 @@ test('a sign-in Kick refuses goes back to the app as an error', async () => {
   assert.equal(back.searchParams.get('error'), 'failed');
   assert.equal(back.searchParams.get('code'), null);
   assert.equal(back.searchParams.get('state'), 'a');
+});
+
+test('a failed sign-in logs which step failed and why, and nothing secret', async (t) => {
+  await start();
+  const log = t.mock.method(console, 'error', () => {});
+  const logged = () => log.mock.calls.map((call) => call.arguments.join(' ')).join('\n');
+
+  fake.tokenStatus = 401;
+  fake.tokenBody = { error: 'invalid_client', access_token: 'leaked-token' };
+  await backFromKick();
+  assert.match(logged(), /token endpoint: 401 invalid_client/);
+  assert.ok(!logged().includes('leaked-token'));
+  assert.ok(!logged().includes('the-secret'));
+
+  // A long or odd message may quote anything, so only its status is kept.
+  fake.tokenBody = { error: 'bad token leaked-token '.repeat(10) };
+  await backFromKick();
+  assert.ok(!logged().includes('leaked-token'));
+
+  fake.tokenStatus = 200;
+  fake.usersStatus = 403;
+  await backFromKick();
+  assert.match(logged(), /\/public\/v1\/users: 403 text\/html/);
 });
 
 test('a refresh Kick refuses asks the app to sign in again', async () => {
