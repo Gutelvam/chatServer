@@ -1,0 +1,46 @@
+{
+  "_comment": "What the relay sends and the app reads. The app's tests keep a copy in crates/ms-chat/tests/relay_frames.json: change both together.",
+  "chat": {
+    "platform": "kick",
+    "kind": "chat",
+    "id": "m1",
+    "author": "Ana",
+    "color": "#FF0000",
+    "content": "hello [emote:37226:KEKW] there",
+    "is_owner": false,
+    "is_moderator": true,
+    "is_member": true
+  },
+  "follow": {
+    "platform": "kick",
+    "kind": "alert",
+    "id": "e1",
+    "event": "follow",
+    "user": "Rui",
+    "amount": null,
+    "count": null,
+    "message": null
+  },
+  "gift": {
+    "platform": "kick",
+    "kind": "alert",
+    "id": "e2",
+    "event": "gift",
+    "user": "Bia",
+    "amount": "100 KICKs",
+    "count": null,
+    "message": "boa"
+  },
+  "gifted_subs": {
+    "platform": "kick",
+    "kind": "alert",
+    "id": "e3",
+    "event": "gifted_subs",
+    "user": "Anonymous",
+    "amount": null,
+    "count": 5,
+    "message": null
+  },
+  "status": { "platform": "tiktok", "kind": "status", "live": false },
+  "ping": { "kind": "ping" }
+}

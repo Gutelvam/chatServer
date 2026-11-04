@@ -1,0 +1,18 @@
+{
+  "name": "multistream-relay",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Receives what a desktop app cannot: Kick's webhooks and TikTok LIVE. Passes it on to each user's MultiStream.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "tiktok-live-connector": "2.4.0",
+    "ws": "8.18.3"
+  }
+}
