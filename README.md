@@ -9,10 +9,10 @@ Cada alteração é testada. **O que chega ao `main` e passa nos testes vai para
 Só é preciso preparar isto uma vez, no terminal, com o [`fly`](https://fly.io/docs/flyctl/install/) instalado e depois de `fly auth login`:
 
 ```powershell
-fly apps create multistream-relay
-fly volumes create relay_data --app multistream-relay --region iad --size 1
-fly secrets set --app multistream-relay PUBLIC_URL=https://multistream-relay.fly.dev KICK_CLIENT_ID=... KICK_CLIENT_SECRET=... DATA_KEY=...
-fly tokens create deploy --app multistream-relay
+fly apps create multistream-relay-ttd
+fly volumes create relay_data --app multistream-relay-ttd --region iad --size 1
+fly secrets set --app multistream-relay-ttd PUBLIC_URL=https://multistream-relay-ttd.fly.dev KICK_CLIENT_ID=... KICK_CLIENT_SECRET=... DATA_KEY=...
+fly tokens create deploy --app multistream-relay-ttd
 ```
 
 Guarda o resultado do último comando como segredo do repositório, sem o colar em mais lado nenhum:

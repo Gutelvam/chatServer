@@ -1,5 +1,5 @@
 # Change `app` to the name you chose. PUBLIC_URL must then be https://<that name>.fly.dev
-app = "multistream-relay"
+app = "multistream-relay-ttd"
 # Between Brazil and Europe, where the users are.
 primary_region = "iad"
 
