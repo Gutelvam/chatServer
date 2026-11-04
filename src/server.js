@@ -160,7 +160,10 @@ export function createRelay({ publicUrl, store, kick, rooms }) {
       handoffs.set(handoff, { userId, name, tokens, subscriptionIds, at: now });
       back.searchParams.set('code', handoff);
     } catch (error) {
-      console.error(`sign-in failed: ${error instanceof KickError ? error.status : 'internal'}`);
+      // Our own message or a network failure's code: nothing from the request itself.
+      const reason =
+        error instanceof KickError ? error.message : (error.cause?.code ?? error.name);
+      console.error(`sign-in failed: ${reason}`);
       back.searchParams.set('error', 'failed');
     }
     response.writeHead(302, { Location: back.href });

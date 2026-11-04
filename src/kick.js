@@ -22,6 +22,22 @@ export function newPkce() {
   return { verifier, challenge };
 }
 
+/**
+ * Why Kick said no, safe to log: its status, and its error's name if it looks like one. Never the
+ * whole answer, which could hold a token. A block page in front of Kick shows up as `text/html`.
+ */
+async function reasonOf(response) {
+  const type = (response.headers.get('content-type') ?? 'unknown').split(';')[0];
+  let name = null;
+  try {
+    const body = JSON.parse(await response.text());
+    name = [body.error, body.message].find((v) => /^[\w .:'-]{1,80}$/.test(v ?? '')) ?? null;
+  } catch {
+    // Not JSON: the type says enough.
+  }
+  return `${response.status} ${name ?? type}`;
+}
+
 export class KickError extends Error {
   constructor(status, message) {
     super(message);
@@ -64,7 +80,10 @@ export class Kick {
       }),
     });
     // Refused means signing in again, whichever way Kick words it. Its own trouble does not.
-    if (!response.ok) throw new KickError(response.status < 500 ? 401 : 502, 'token refused');
+    if (!response.ok) {
+      const status = response.status < 500 ? 401 : 502;
+      throw new KickError(status, `token endpoint: ${await reasonOf(response)}`);
+    }
     const body = await response.json();
     return {
       access: body.access_token,
@@ -98,7 +117,10 @@ export class Kick {
         ...(init.body ? { 'Content-Type': 'application/json' } : {}),
       },
     });
-    if (!response.ok) throw new KickError(response.status, `kick answered ${response.status}`);
+    if (!response.ok) {
+      const where = path.split('?')[0];
+      throw new KickError(response.status, `${where}: ${await reasonOf(response)}`);
+    }
     return response.status === 204 ? null : response.json();
   }
 
