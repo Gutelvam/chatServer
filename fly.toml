@@ -1,6 +1,6 @@
 # Change `app` to the name you chose. PUBLIC_URL must then be https://<that name>.fly.dev
 app = "multistream-relay"
-primary_region = "mad"
+primary_region = "cdg"
 
 [env]
   DATA_DIR = "/data"
