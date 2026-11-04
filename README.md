@@ -10,7 +10,7 @@ Só é preciso preparar isto uma vez, no terminal, com o [`fly`](https://fly.io/
 
 ```powershell
 fly apps create multistream-relay
-fly volumes create relay_data --app multistream-relay --region cdg --size 1
+fly volumes create relay_data --app multistream-relay --region iad --size 1
 fly secrets set --app multistream-relay PUBLIC_URL=https://multistream-relay.fly.dev KICK_CLIENT_ID=... KICK_CLIENT_SECRET=... DATA_KEY=...
 fly tokens create deploy --app multistream-relay
 ```
