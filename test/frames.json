@@ -53,5 +53,6 @@
     "message": "agua"
   },
   "status": { "platform": "tiktok", "kind": "status", "live": false },
+  "stats": { "platform": "tiktok", "kind": "stats", "viewers": 1200, "likes": 18000 },
   "ping": { "kind": "ping" }
 }

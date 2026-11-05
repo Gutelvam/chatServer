@@ -7,6 +7,24 @@ import { randomUUID } from 'node:crypto';
 const LINGER_MS = 60_000;
 /** A channel that is not live is looked at again this often. */
 const RETRY_MS = 60_000;
+/** Hearts arrive many times a second: apps hear about them this often. */
+const STATS_EVERY_MS = 5_000;
+
+/** A count from the library, which has named these differently over its versions. */
+const count = (...values) => {
+  for (const value of values) {
+    const number = Number(value);
+    if (value != null && value !== '' && Number.isFinite(number) && number >= 0) return number;
+  }
+  return null;
+};
+
+/** What a library event says about the numbers of the live. */
+export function toStats(type, data) {
+  if (type === 'roomUser') return { viewers: count(data.total, data.viewerCount) };
+  if (type === 'like') return { likes: count(data.total, data.totalLikeCount) };
+  return null;
+}
 
 export const cleanUsername = (input) => {
   const name = String(input ?? '')
@@ -84,6 +102,9 @@ export class TikTokRooms {
     clearTimeout(room.closing);
     room.listeners.add(send);
     send({ kind: 'status', live: room.live });
+    if (room.stats.viewers !== null || room.stats.likes !== null) {
+      send({ kind: 'stats', ...room.stats });
+    }
     return () => {
       room.listeners.delete(send);
       if (room.listeners.size === 0) {
@@ -94,7 +115,12 @@ export class TikTokRooms {
   }
 
   #open(username) {
-    const room = { listeners: new Set(), live: false, closed: false };
+    const room = {
+      listeners: new Set(),
+      live: false,
+      closed: false,
+      stats: { viewers: null, likes: null },
+    };
     this.#rooms.set(username, room);
     const connection = this.#connect(username);
     room.connection = connection;
@@ -105,6 +131,21 @@ export class TikTokRooms {
       connection.on(type, (data) => {
         const frame = toFrame(type, data);
         if (frame) each(frame);
+      });
+    }
+    for (const type of ['roomUser', 'like']) {
+      connection.on(type, (data) => {
+        const found = toStats(type, data);
+        if (!found) return;
+        for (const [name, value] of Object.entries(found)) {
+          if (value !== null) room.stats[name] = value;
+        }
+        if (room.statsTimer) return;
+        room.statsTimer = setTimeout(() => {
+          room.statsTimer = null;
+          each({ kind: 'stats', ...room.stats });
+        }, STATS_EVERY_MS);
+        room.statsTimer.unref?.();
       });
     }
     const attempt = async () => {
@@ -124,6 +165,7 @@ export class TikTokRooms {
     const ended = () => {
       if (room.closed || !room.live) return;
       room.live = false;
+      room.stats = { viewers: null, likes: null };
       each({ kind: 'status', live: false });
       room.retry = setTimeout(attempt, RETRY_MS);
       room.retry.unref?.();
@@ -137,6 +179,7 @@ export class TikTokRooms {
   #close(username, room) {
     room.closed = true;
     clearTimeout(room.retry);
+    clearTimeout(room.statsTimer);
     this.#rooms.delete(username);
     Promise.resolve(room.connection.disconnect?.()).catch(() => {});
   }
