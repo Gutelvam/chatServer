@@ -17,6 +17,8 @@ const WEBHOOK_MAX_AGE_MS = 10 * 60 * 1000;
 const REMEMBER_WEBHOOKS = 5000;
 const PING_MS = 30_000;
 const MAX_MESSAGE_LETTERS = 500;
+const MAX_TITLE_LETTERS = 140;
+const MAX_CATEGORY_LETTERS = 100;
 /** Sign-ins and TikTok connections allowed from one address, per minute. */
 const RATE_PER_MINUTE = 20;
 const TIKTOK_PER_ADDRESS = 3;
@@ -222,6 +224,47 @@ export function createRelay({ publicUrl, store, kick, rooms }) {
     reply(response, 200, {});
   };
 
+  const searchCategories = async (url, response, session) => {
+    const query = (url.searchParams.get('q') ?? '').trim().slice(0, MAX_CATEGORY_LETTERS);
+    if (!query) return reply(response, 200, { categories: [] });
+    const found = await kick.searchCategories(await freshAccess(session), query);
+    reply(response, 200, { categories: found.map((c) => c.name) });
+  };
+
+  /**
+   * The live's title and category. Kick answers 401 or 403 to a sign-in from before this was asked
+   * for. That session still works for everything else, so it answers 403: 401 here means the
+   * session itself is gone, and the app would forget the sign-in.
+   */
+  const updateChannel = async (request, response, session) => {
+    const { title, category } = await readJson(request);
+    const streamTitle = String(title ?? '')
+      .trim()
+      .slice(0, MAX_TITLE_LETTERS);
+    const wanted = String(category ?? '')
+      .trim()
+      .slice(0, MAX_CATEGORY_LETTERS);
+    const access = await freshAccess(session);
+    try {
+      const found = wanted
+        ? (await kick.searchCategories(access, wanted)).find(
+            (c) => c.name.toLowerCase() === wanted.toLowerCase(),
+          )
+        : null;
+      const changes = {
+        ...(streamTitle ? { stream_title: streamTitle } : {}),
+        ...(found ? { category_id: found.id } : {}),
+      };
+      if (Object.keys(changes).length > 0) await kick.updateChannel(access, changes);
+      reply(response, 200, { category_found: !wanted || Boolean(found) });
+    } catch (error) {
+      if (error instanceof KickError && [401, 403].includes(error.status)) {
+        return reply(response, 403, { error: 'sign in again to allow this' });
+      }
+      throw error;
+    }
+  };
+
   /** Signing out: this app forgets it, and Kick stops sending when no other app needs it. */
   const signOut = async (response, session) => {
     if (store.othersOf(session.userId, session.hash) === 0) {
@@ -251,9 +294,17 @@ export function createRelay({ publicUrl, store, kick, rooms }) {
     if (route === 'POST /kick/claim') return await claim(request, response);
     const token = bearer(request);
     const session = token && store.find(token);
-    if (['POST /kick/chat', 'DELETE /kick/session'].includes(route)) {
+    const needsSession = [
+      'POST /kick/chat',
+      'DELETE /kick/session',
+      'GET /kick/categories',
+      'PATCH /kick/channel',
+    ];
+    if (needsSession.includes(route)) {
       if (!session) return reply(response, 401, { error: 'sign in again' });
       if (route === 'POST /kick/chat') return await sendChat(request, response, session);
+      if (route === 'GET /kick/categories') return await searchCategories(url, response, session);
+      if (route === 'PATCH /kick/channel') return await updateChannel(request, response, session);
       return await signOut(response, session);
     }
     reply(response, 404, { error: 'not found' });
