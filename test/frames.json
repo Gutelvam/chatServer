@@ -5,6 +5,7 @@
     "kind": "chat",
     "id": "m1",
     "author": "Ana",
+    "author_id": "9",
     "color": "#FF0000",
     "content": "hello [emote:37226:KEKW] there",
     "is_owner": false,

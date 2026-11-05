@@ -26,6 +26,7 @@ export function toFrame(type, data) {
         kind: 'chat',
         id,
         author: user,
+        author_id: data.user?.userId != null ? String(data.user.userId) : null,
         color: null,
         content: data.comment ?? '',
         is_owner: false,

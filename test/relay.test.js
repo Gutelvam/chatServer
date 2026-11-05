@@ -541,11 +541,12 @@ test('tiktok viewers of a channel share one connection, within a limit', async (
   await until('both connected', () => first.got.length > 0 && second.got.length > 0);
   assert.equal(made.length, 1);
   await until('live', () => first.got.some((f) => f.live === true));
-  made[0].fire('chat', { user: { nickname: 'Ana' }, comment: 'oi' });
+  made[0].fire('chat', { user: { nickname: 'Ana', userId: '55' }, comment: 'oi' });
   await until('the message', () => second.got.some((f) => f.kind === 'chat'));
   const message = second.got.find((f) => f.kind === 'chat');
   assert.equal(message.platform, 'tiktok');
   assert.equal(message.content, 'oi');
+  assert.equal(message.author_id, '55');
   const full = open('another');
   const code = await new Promise((resolve) => full.socket.on('close', resolve));
   assert.equal(code, 4503);

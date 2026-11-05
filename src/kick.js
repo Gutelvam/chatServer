@@ -216,6 +216,7 @@ export function toFrame(type, id, event) {
         kind: 'chat',
         id: event.message_id ?? id,
         author: nameOf(event.sender),
+        author_id: event.sender?.user_id != null ? String(event.sender.user_id) : null,
         color: event.sender?.identity?.username_color || null,
         content: event.content ?? '',
         is_owner: event.sender?.user_id === event.broadcaster?.user_id,
