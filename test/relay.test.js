@@ -26,7 +26,7 @@ function sign(id, timestamp, body) {
 }
 
 /** What Kick was asked, and how it answers. */
-const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7, channelStatus: 204 };
+const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7, channelStatus: 204, moderationStatus: 200 };
 let fakeServer;
 let fakeBase;
 let dir;
@@ -103,6 +103,13 @@ before(async () => {
         response.writeHead(fake.channelStatus);
         return response.end();
       }
+      if (path === '/public/v1/moderation/bans') {
+        return json(fake.moderationStatus, { data: {} });
+      }
+      if (path.startsWith('/public/v1/chat/')) {
+        response.writeHead(fake.moderationStatus === 200 ? 204 : fake.moderationStatus);
+        return response.end();
+      }
       if (path === '/public/v1/chat') return json(200, { data: { is_sent: true } });
       if (path === '/public/v1/public-key') return json(200, { data: { public_key: publicPem } });
       json(404, {});
@@ -147,6 +154,7 @@ afterEach(async () => {
     expiresIn: 3600,
     user: 7,
     channelStatus: 204,
+    moderationStatus: 200,
   });
 });
 
@@ -679,4 +687,58 @@ test('tags go to Kick within its limits, and are left alone when not sent', asyn
   await setDetails(session, { title: 'Ranked', category: '', tags: null });
   const second = fake.requests.find((r) => r.method === 'PATCH');
   assert.equal(JSON.parse(second.body).custom_tags, undefined);
+});
+
+const moderate = (session, body) =>
+  fetch(`${base}/kick/moderation`, {
+    method: 'POST',
+    headers: session ? { Authorization: `Bearer ${session}` } : {},
+    body: JSON.stringify(body),
+  });
+
+test('the review queue acts only on the signed-in channel', async () => {
+  await start();
+  const session = await signIn();
+  assert.equal((await moderate(null, { action: 'ban', user_id: '9' })).status, 401);
+
+  assert.equal((await moderate(session, { action: 'timeout', user_id: '9', minutes: 99999 })).status, 200);
+  const timeout = fake.requests.find((r) => r.path === '/public/v1/moderation/bans');
+  assert.deepEqual(JSON.parse(timeout.body), { broadcaster_user_id: 7, user_id: 9, duration: 10080 });
+
+  fake.requests.length = 0;
+  assert.equal((await moderate(session, { action: 'ban', user_id: '9' })).status, 200);
+  const ban = fake.requests.find((r) => r.path === '/public/v1/moderation/bans');
+  assert.deepEqual(JSON.parse(ban.body), { broadcaster_user_id: 7, user_id: 9 }, 'permanent');
+
+  fake.requests.length = 0;
+  assert.equal((await moderate(session, { action: 'unban', user_id: '9' })).status, 200);
+  assert.equal(fake.requests.find((r) => r.path === '/public/v1/moderation/bans').method, 'DELETE');
+
+  fake.requests.length = 0;
+  assert.equal((await moderate(session, { action: 'delete', message_id: 'm/1' })).status, 200);
+  const removed = fake.requests.find((r) => r.method === 'DELETE');
+  assert.equal(removed.path, '/public/v1/chat/m%2F1');
+});
+
+test('nobody can ban the streamer, or nobody at all, or do anything else', async () => {
+  await start();
+  const session = await signIn();
+  for (const body of [
+    { action: 'ban', user_id: '7' },
+    { action: 'ban', user_id: 'abc' },
+    { action: 'ban' },
+    { action: 'delete' },
+    { action: 'wipe', user_id: '9' },
+  ]) {
+    assert.equal((await moderate(session, body)).status, 400, JSON.stringify(body));
+  }
+  assert.ok(!fake.requests.some((r) => r.path.startsWith('/public/v1/moderation')));
+});
+
+test('an older sign-in is asked to sign in again for this, and keeps its session', async () => {
+  await start();
+  const session = await signIn();
+  fake.moderationStatus = 403;
+  assert.equal((await moderate(session, { action: 'ban', user_id: '9' })).status, 403);
+  assert.ok(store.find(session));
 });

@@ -20,6 +20,7 @@ const MAX_MESSAGE_LETTERS = 500;
 const MAX_TITLE_LETTERS = 140;
 const MAX_CATEGORY_LETTERS = 100;
 const MAX_TAGS = 10;
+const MAX_TIMEOUT_MINUTES = 10080;
 const MAX_TAG_LETTERS = 25;
 /** Sign-ins and TikTok connections allowed from one address, per minute. */
 const RATE_PER_MINUTE = 20;
@@ -275,6 +276,39 @@ export function createRelay({ publicUrl, store, kick, rooms }) {
     }
   };
 
+  /**
+   * What the streamer pressed in the review queue, on their own channel only. As with the channel's
+   * details, a sign-in from before this permission answers 403 and keeps its session.
+   */
+  const moderate = async (request, response, session) => {
+    const { action, user_id: userId, message_id: messageId, minutes } = await readJson(request);
+    const user = Number(userId);
+    const needsUser = ['timeout', 'ban', 'unban'].includes(action);
+    if (needsUser && (!Number.isSafeInteger(user) || user < 1)) {
+      return reply(response, 400, { error: 'no such user' });
+    }
+    if (needsUser && user === session.userId) {
+      return reply(response, 400, { error: 'that is you' });
+    }
+    if (action === 'delete' && !messageId) return reply(response, 400, { error: 'no message' });
+    const access = await freshAccess(session);
+    try {
+      if (action === 'delete') await kick.deleteMessage(access, String(messageId));
+      else if (action === 'ban') await kick.ban(access, session.userId, user);
+      else if (action === 'unban') await kick.unban(access, session.userId, user);
+      else if (action === 'timeout') {
+        const length = Math.min(Math.max(Math.round(Number(minutes)) || 1, 1), MAX_TIMEOUT_MINUTES);
+        await kick.ban(access, session.userId, user, length);
+      } else return reply(response, 400, { error: 'unknown action' });
+      reply(response, 200, {});
+    } catch (error) {
+      if (error instanceof KickError && [401, 403].includes(error.status)) {
+        return reply(response, 403, { error: 'sign in again to allow this' });
+      }
+      throw error;
+    }
+  };
+
   /** Signing out: this app forgets it, and Kick stops sending when no other app needs it. */
   const signOut = async (response, session) => {
     if (store.othersOf(session.userId, session.hash) === 0) {
@@ -310,12 +344,14 @@ export function createRelay({ publicUrl, store, kick, rooms }) {
       'GET /kick/categories',
       'PATCH /kick/channel',
       'GET /kick/channel',
+      'POST /kick/moderation',
     ];
     if (needsSession.includes(route)) {
       if (!session) return reply(response, 401, { error: 'sign in again' });
       if (route === 'POST /kick/chat') return await sendChat(request, response, session);
       if (route === 'GET /kick/categories') return await searchCategories(url, response, session);
       if (route === 'PATCH /kick/channel') return await updateChannel(request, response, session);
+      if (route === 'POST /kick/moderation') return await moderate(request, response, session);
       if (route === 'GET /kick/channel') {
         return reply(response, 200, await kick.channel(session.userId));
       }

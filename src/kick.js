@@ -1,7 +1,8 @@
 // Kick's official API. The client secret and the webhooks are why this server exists.
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 
-export const SCOPES = 'user:read chat:write events:subscribe channel:write';
+export const SCOPES =
+  'user:read chat:write events:subscribe channel:write moderation:ban moderation:chat_message:manage';
 const EVENTS = [
   'chat.message.sent',
   'channel.followed',
@@ -218,6 +219,31 @@ export class Kick {
       category: channel.category?.name ?? '',
       tags: channel.stream?.custom_tags ?? [],
     };
+  }
+
+  /** A timeout with `minutes`, a permanent ban without them. */
+  ban(access, broadcaster, user, minutes) {
+    return this.#api('/public/v1/moderation/bans', access, {
+      method: 'POST',
+      body: JSON.stringify({
+        broadcaster_user_id: broadcaster,
+        user_id: user,
+        ...(minutes ? { duration: minutes } : {}),
+      }),
+    });
+  }
+
+  unban(access, broadcaster, user) {
+    return this.#api('/public/v1/moderation/bans', access, {
+      method: 'DELETE',
+      body: JSON.stringify({ broadcaster_user_id: broadcaster, user_id: user }),
+    });
+  }
+
+  deleteMessage(access, message) {
+    return this.#api(`/public/v1/chat/${encodeURIComponent(message)}`, access, {
+      method: 'DELETE',
+    });
   }
 
   updateChannel(access, changes) {
