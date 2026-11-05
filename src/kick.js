@@ -1,7 +1,7 @@
 // Kick's official API. The client secret and the webhooks are why this server exists.
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 
-export const SCOPES = 'user:read chat:write events:subscribe';
+export const SCOPES = 'user:read chat:write events:subscribe channel:write';
 const EVENTS = [
   'chat.message.sent',
   'channel.followed',
@@ -169,6 +169,20 @@ export class Kick {
     return this.#api('/public/v1/chat', access, {
       method: 'POST',
       body: JSON.stringify({ type: 'user', broadcaster_user_id: userId, content }),
+    });
+  }
+
+  /** Games and categories like this name. Kick's only search by words, though marked as old. */
+  async searchCategories(access, query) {
+    const search = new URLSearchParams({ q: query });
+    const body = await this.#api(`/public/v1/categories?${search}`, access);
+    return (body.data ?? []).map(({ id, name }) => ({ id, name }));
+  }
+
+  updateChannel(access, changes) {
+    return this.#api('/public/v1/channels', access, {
+      method: 'PATCH',
+      body: JSON.stringify(changes),
     });
   }
 

@@ -26,7 +26,7 @@ function sign(id, timestamp, body) {
 }
 
 /** What Kick was asked, and how it answers. */
-const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7 };
+const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7, channelStatus: 204 };
 let fakeServer;
 let fakeBase;
 let dir;
@@ -80,6 +80,18 @@ before(async () => {
         response.writeHead(204);
         return response.end();
       }
+      if (path === '/public/v1/categories') {
+        return json(200, {
+          data: [
+            { id: 1, name: 'Valorant Mobile', thumbnail: 'x' },
+            { id: 2, name: 'VALORANT', thumbnail: 'x' },
+          ],
+        });
+      }
+      if (path === '/public/v1/channels' && request.method === 'PATCH') {
+        response.writeHead(fake.channelStatus);
+        return response.end();
+      }
       if (path === '/public/v1/chat') return json(200, { data: { is_sent: true } });
       if (path === '/public/v1/public-key') return json(200, { data: { public_key: publicPem } });
       json(404, {});
@@ -123,6 +135,7 @@ afterEach(async () => {
     refuseEvent: null,
     expiresIn: 3600,
     user: 7,
+    channelStatus: 204,
   });
 });
 
@@ -573,4 +586,55 @@ test('a bad tiktok address is refused', async () => {
   await start({ tiktok });
   const socket = new WebSocket(`${wsBase}/tiktok/stream?username=${encodeURIComponent('../x')}`);
   await new Promise((resolve) => socket.on('error', resolve));
+});
+
+const setDetails = (session, body) =>
+  fetch(`${base}/kick/channel`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${session}` },
+    body: JSON.stringify(body),
+  });
+
+test('the title and category go to Kick, by the id of the same name', async () => {
+  await start();
+  const session = await signIn();
+  const toKick = new URL(
+    (await noRedirect(`${base}/kick/login?state=s&return=${encodeURIComponent('http://127.0.0.1:1/')}`))
+      .headers.get('location'),
+  );
+  assert.ok(toKick.searchParams.get('scope').includes('channel:write'));
+  const answer = await setDetails(session, { title: ' Ranked ', category: 'valorant' });
+  assert.equal(answer.status, 200);
+  assert.equal((await answer.json()).category_found, true);
+  const patch = fake.requests.find((r) => r.method === 'PATCH');
+  assert.deepEqual(JSON.parse(patch.body), { stream_title: 'Ranked', category_id: 2 });
+});
+
+test('a category Kick does not have still sends the title, and says so', async () => {
+  await start();
+  const session = await signIn();
+  const answer = await setDetails(session, { title: 'Ranked', category: 'Valo' });
+  assert.equal((await answer.json()).category_found, false);
+  const patch = fake.requests.find((r) => r.method === 'PATCH');
+  assert.deepEqual(JSON.parse(patch.body), { stream_title: 'Ranked' });
+});
+
+test('an older sign-in is told to sign in again, without losing its session', async () => {
+  await start();
+  const session = await signIn();
+  fake.channelStatus = 401;
+  const answer = await setDetails(session, { title: 'Ranked', category: '' });
+  assert.equal(answer.status, 403);
+  assert.ok(store.find(session), 'the session stays');
+});
+
+test('categories need a session, and only names leave', async () => {
+  await start();
+  const session = await signIn();
+  const without = await fetch(`${base}/kick/categories?q=valo`);
+  assert.equal(without.status, 401);
+  const answer = await fetch(`${base}/kick/categories?q=valo`, {
+    headers: { Authorization: `Bearer ${session}` },
+  });
+  assert.deepEqual((await answer.json()).categories, ['Valorant Mobile', 'VALORANT']);
 });
