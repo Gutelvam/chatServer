@@ -88,6 +88,17 @@ before(async () => {
           ],
         });
       }
+      if (path === '/public/v1/channels' && request.method === 'GET') {
+        return json(200, {
+          data: [
+            {
+              stream_title: 'Agora',
+              category: { id: 2, name: 'VALORANT', thumbnail: 'x' },
+              stream: { custom_tags: ['FPS'], key: 'the-stream-key', is_live: false },
+            },
+          ],
+        });
+      }
       if (path === '/public/v1/channels' && request.method === 'PATCH') {
         response.writeHead(fake.channelStatus);
         return response.end();
@@ -637,4 +648,35 @@ test('categories need a session, and only names leave', async () => {
     headers: { Authorization: `Bearer ${session}` },
   });
   assert.deepEqual((await answer.json()).categories, ['Valorant Mobile', 'VALORANT']);
+});
+
+test('reading a channel needs no new sign-in, and the stream key never leaves', async () => {
+  await start();
+  const session = await signIn();
+  const without = await fetch(`${base}/kick/channel`);
+  assert.equal(without.status, 401);
+  const answer = await fetch(`${base}/kick/channel`, {
+    headers: { Authorization: `Bearer ${session}` },
+  });
+  assert.equal(answer.status, 200);
+  const text = await answer.text();
+  assert.deepEqual(JSON.parse(text), { title: 'Agora', category: 'VALORANT', tags: ['FPS'] });
+  assert.ok(!text.includes('the-stream-key'));
+  const read = fake.requests.find((r) => r.path === '/public/v1/channels');
+  assert.ok(read.url.includes('broadcaster_user_id=7'));
+  const asked = fake.requests.filter((r) => r.path === '/oauth/token');
+  assert.ok(asked.some((r) => r.body.includes('grant_type=client_credentials')));
+});
+
+test('tags go to Kick within its limits, and are left alone when not sent', async () => {
+  await start();
+  const session = await signIn();
+  const many = Array.from({ length: 12 }, (_, i) => `tag${i}`);
+  await setDetails(session, { title: 'Ranked', category: '', tags: many });
+  const first = fake.requests.find((r) => r.method === 'PATCH');
+  assert.equal(JSON.parse(first.body).custom_tags.length, 10);
+  fake.requests.length = 0;
+  await setDetails(session, { title: 'Ranked', category: '', tags: null });
+  const second = fake.requests.find((r) => r.method === 'PATCH');
+  assert.equal(JSON.parse(second.body).custom_tags, undefined);
 });

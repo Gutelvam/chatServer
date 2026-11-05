@@ -50,6 +50,7 @@ export class KickError extends Error {
 
 export class Kick {
   #config;
+  #app = null;
   #publicKey = null;
   #publicKeyAt = 0;
 
@@ -177,6 +178,46 @@ export class Kick {
     const search = new URLSearchParams({ q: query });
     const body = await this.#api(`/public/v1/categories?${search}`, access);
     return (body.data ?? []).map(({ id, name }) => ({ id, name }));
+  }
+
+  /**
+   * A token of the app itself, not of a person. Reading a channel takes no more, so nobody has to
+   * sign in again for this.
+   */
+  async #appToken() {
+    if (this.#app && Date.now() < this.#app.until) return this.#app.token;
+    const response = await fetch(`${this.#config.idBase}/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: this.#config.clientId,
+        client_secret: this.#config.clientSecret,
+      }),
+    });
+    if (!response.ok) throw new KickError(response.status, 'no app token');
+    const body = await response.json();
+    this.#app = {
+      token: body.access_token,
+      until: Date.now() + body.expires_in * 1000 - EXPIRY_MARGIN_MS,
+    };
+    return this.#app.token;
+  }
+
+  /**
+   * What a channel shows now. Only these: Kick's answer also holds the stream key, which must not
+   * leave this function.
+   */
+  async channel(userId) {
+    const search = new URLSearchParams({ broadcaster_user_id: userId });
+    const body = await this.#api(`/public/v1/channels?${search}`, await this.#appToken());
+    const channel = body.data?.[0];
+    if (!channel) throw new KickError(404, 'no channel');
+    return {
+      title: channel.stream_title ?? '',
+      category: channel.category?.name ?? '',
+      tags: channel.stream?.custom_tags ?? [],
+    };
   }
 
   updateChannel(access, changes) {
