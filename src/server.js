@@ -19,6 +19,8 @@ const PING_MS = 30_000;
 const MAX_MESSAGE_LETTERS = 500;
 const MAX_TITLE_LETTERS = 140;
 const MAX_CATEGORY_LETTERS = 100;
+const MAX_TAGS = 10;
+const MAX_TAG_LETTERS = 25;
 /** Sign-ins and TikTok connections allowed from one address, per minute. */
 const RATE_PER_MINUTE = 20;
 const TIKTOK_PER_ADDRESS = 3;
@@ -237,7 +239,7 @@ export function createRelay({ publicUrl, store, kick, rooms }) {
    * session itself is gone, and the app would forget the sign-in.
    */
   const updateChannel = async (request, response, session) => {
-    const { title, category } = await readJson(request);
+    const { title, category, tags } = await readJson(request);
     const streamTitle = String(title ?? '')
       .trim()
       .slice(0, MAX_TITLE_LETTERS);
@@ -254,6 +256,14 @@ export function createRelay({ publicUrl, store, kick, rooms }) {
       const changes = {
         ...(streamTitle ? { stream_title: streamTitle } : {}),
         ...(found ? { category_id: found.id } : {}),
+        ...(Array.isArray(tags)
+          ? {
+              custom_tags: tags
+                .map((tag) => String(tag).trim().slice(0, MAX_TAG_LETTERS))
+                .filter(Boolean)
+                .slice(0, MAX_TAGS),
+            }
+          : {}),
       };
       if (Object.keys(changes).length > 0) await kick.updateChannel(access, changes);
       reply(response, 200, { category_found: !wanted || Boolean(found) });
@@ -299,12 +309,16 @@ export function createRelay({ publicUrl, store, kick, rooms }) {
       'DELETE /kick/session',
       'GET /kick/categories',
       'PATCH /kick/channel',
+      'GET /kick/channel',
     ];
     if (needsSession.includes(route)) {
       if (!session) return reply(response, 401, { error: 'sign in again' });
       if (route === 'POST /kick/chat') return await sendChat(request, response, session);
       if (route === 'GET /kick/categories') return await searchCategories(url, response, session);
       if (route === 'PATCH /kick/channel') return await updateChannel(request, response, session);
+      if (route === 'GET /kick/channel') {
+        return reply(response, 200, await kick.channel(session.userId));
+      }
       return await signOut(response, session);
     }
     reply(response, 404, { error: 'not found' });
