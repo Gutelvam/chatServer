@@ -1,6 +1,6 @@
 # MultiStream relay
 
-Servidor pequeno que recebe o que a aplicação de computador MultiStream não consegue receber: os webhooks do Kick e o TikTok LIVE. Depois entrega tudo à aplicação de cada pessoa por WebSocket.
+Servidor pequeno que recebe o que a aplicação de computador MultiStream não consegue receber: os webhooks do Kick e o TikTok LIVE. Depois entrega tudo à aplicação de cada pessoa por WebSocket. Guarda também os segredos das apps do Kick e da Google, para não irem no instalador.
 
 ## Publicação
 
@@ -41,6 +41,7 @@ A criação da app no Kick e os limites de cada plataforma estão em `docs/platf
 | `DATA_KEY` | Sim | 32 bytes em hexadecimal, que cifram os logins guardados |
 | `DATA_DIR` | Não | Onde guardar os dados. Por omissão, `/data` |
 | `KICK_CLIENT_ID`, `KICK_CLIENT_SECRET` | Para o Kick | A app criada no Kick |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Para o YouTube | A app criada na Google. O `scripts/move-google-secret.ps1` do repositório da aplicação coloca-os aqui |
 | `TIKTOK_ENABLED` | Para o TikTok | `1` para ligar. Sem isto, a biblioteca não oficial nem é carregada |
 | `TIKTOK_MAX_ROOMS` | Não | Canais do TikTok ao mesmo tempo. Por omissão, 20 |
 | `TIKTOK_SIGN_API_KEY` | Não | Chave do serviço de assinaturas |
@@ -56,6 +57,8 @@ A criação da app no Kick e os limites de cada plataforma estão em `docs/platf
 | `POST /kick/webhook` | Eventos do Kick |
 | `POST /kick/chat` | Enviar uma mensagem, com a sessão |
 | `DELETE /kick/session` | Terminar sessão |
+| `POST /google/token` | Troca o código do login da Google por tokens, juntando o segredo. Não guarda nada |
+| `POST /google/refresh` | Renova o acesso ao YouTube, da mesma forma |
 | WS `/kick/stream` | Mensagens e eventos da conta, com a sessão |
 | WS `/tiktok/stream?username=` | Mensagens e eventos de um canal do TikTok |
 
