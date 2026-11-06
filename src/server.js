@@ -71,7 +71,7 @@ const bearer = (request) => {
 const addressOf = (request) =>
   request.headers['fly-client-ip'] ?? request.socket.remoteAddress ?? 'unknown';
 
-export function createRelay({ publicUrl, store, kick, rooms }) {
+export function createRelay({ publicUrl, store, kick, rooms, google = null }) {
   const logins = new Map();
   const handoffs = new Map();
   const listeners = new Map();
@@ -309,6 +309,28 @@ export function createRelay({ publicUrl, store, kick, rooms }) {
     }
   };
 
+  /** The one step of Google's sign-in that needs the secret. What passes through is not kept. */
+  const googleToken = async (request, response, route) => {
+    if (limited(request)) return reply(response, 429, { error: 'too many attempts' });
+    const body = (await readJson(request)) ?? {};
+    const text = (value) => typeof value === 'string' && value.length > 0;
+    let answer;
+    if (route === 'POST /google/refresh') {
+      if (!text(body.refresh_token)) return reply(response, 400, { error: 'bad request' });
+      answer = await google.refresh(body.refresh_token);
+    } else {
+      if (!text(body.code) || !text(body.code_verifier) || !isLoopback(body.redirect_uri)) {
+        return reply(response, 400, { error: 'bad request' });
+      }
+      answer = await google.exchange({
+        code: body.code,
+        verifier: body.code_verifier,
+        redirect: body.redirect_uri,
+      });
+    }
+    reply(response, answer.status, answer.body);
+  };
+
   /** Signing out: this app forgets it, and Kick stops sending when no other app needs it. */
   const signOut = async (response, session) => {
     if (store.othersOf(session.userId, session.hash) === 0) {
@@ -327,7 +349,16 @@ export function createRelay({ publicUrl, store, kick, rooms }) {
     const url = new URL(request.url, publicUrl);
     const route = `${request.method} ${url.pathname}`;
     if (route === 'GET /health') {
-      return reply(response, 200, { ok: true, tiktok: Boolean(rooms), kick: Boolean(kick) });
+      return reply(response, 200, {
+        ok: true,
+        tiktok: Boolean(rooms),
+        kick: Boolean(kick),
+        google: Boolean(google),
+      });
+    }
+    if (route === 'POST /google/token' || route === 'POST /google/refresh') {
+      if (!google) return reply(response, 503, { error: 'google is not set up' });
+      return await googleToken(request, response, route);
     }
     if (route === 'GET /kick/login') return startLogin(url, response, request);
     if (!kick && url.pathname.startsWith('/kick')) {

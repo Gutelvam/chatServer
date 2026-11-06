@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { after, afterEach, before, test } from 'node:test';
 import WebSocket from 'ws';
 
+import { Google } from '../src/google.js';
 import { Kick, toFrame as kickFrame } from '../src/kick.js';
 import { createRelay } from '../src/server.js';
 import { hashToken, Store } from '../src/store.js';
@@ -26,7 +27,7 @@ function sign(id, timestamp, body) {
 }
 
 /** What Kick was asked, and how it answers. */
-const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7, channelStatus: 204, moderationStatus: 200, onAir: false };
+const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7, channelStatus: 204, moderationStatus: 200, onAir: false, googleStatus: 200, googleBody: null };
 let fakeServer;
 let fakeBase;
 let dir;
@@ -52,6 +53,17 @@ before(async () => {
         response.writeHead(status, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify(value));
       };
+      if (path === '/google-token') {
+        return json(
+          fake.googleStatus,
+          fake.googleBody ?? {
+            access_token: 'g-access',
+            refresh_token: 'g-refresh',
+            expires_in: 3599,
+            scope: 'not for the app',
+          },
+        );
+      }
       if (path === '/oauth/token') {
         if (fake.tokenStatus !== 200) return json(fake.tokenStatus, fake.tokenBody);
         const refreshed = body.includes('grant_type=refresh_token');
@@ -127,7 +139,7 @@ before(async () => {
 
 after(() => fakeServer.close());
 
-async function start({ tiktok } = {}) {
+async function start({ tiktok, withGoogle = true } = {}) {
   dir = mkdtempSync(join(tmpdir(), 'relay-'));
   store = new Store(dir, KEY);
   const kick = new Kick({
@@ -143,14 +155,22 @@ async function start({ tiktok } = {}) {
   await new Promise((resolve) => probe.close(resolve));
   base = `http://127.0.0.1:${port}`;
   wsBase = `ws://127.0.0.1:${port}`;
-  relay = createRelay({ publicUrl: base, store, kick, rooms: tiktok ?? null });
+  const google = withGoogle
+    ? new Google({
+        clientId: 'g-client',
+        clientSecret: 'g-secret',
+        tokenUrl: `${fakeBase}/google-token`,
+      })
+    : null;
+  relay = createRelay({ publicUrl: base, store, kick, rooms: tiktok ?? null, google });
   await new Promise((resolve) => relay.server.listen(port, '127.0.0.1', resolve));
 }
 
 afterEach(async () => {
   await relay?.close();
   relay = null;
-  rmSync(dir, { recursive: true, force: true });
+  // On Windows a file just written can hold the folder for a moment.
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   Object.assign(fake, {
     requests: [],
     tokenStatus: 200,
@@ -162,6 +182,8 @@ afterEach(async () => {
     channelStatus: 204,
     moderationStatus: 200,
     onAir: false,
+    googleStatus: 200,
+    googleBody: null,
   });
 });
 
@@ -802,4 +824,82 @@ test('hearts reach the apps at a calm pace, and a new app hears the numbers at o
   assert.deepEqual(second.at(-1), { kind: 'stats', viewers: 10, likes: 50 });
   leave();
   rooms.closeAll();
+});
+
+const toGoogle = (path, body, headers = {}) =>
+  fetch(`${base}/google/${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+const googleSignIn = {
+  code: 'the-code',
+  code_verifier: 'the-verifier',
+  redirect_uri: 'http://127.0.0.1:5555',
+};
+
+test('google: the secret is added here and only the tokens go back', async () => {
+  await start();
+  const answer = await toGoogle('token', googleSignIn);
+  assert.equal(answer.status, 200);
+  assert.deepEqual(await answer.json(), {
+    access_token: 'g-access',
+    expires_in: 3599,
+    refresh_token: 'g-refresh',
+  });
+  const sent = new URLSearchParams(fake.requests.at(-1).body);
+  assert.equal(sent.get('client_id'), 'g-client');
+  assert.equal(sent.get('client_secret'), 'g-secret');
+  assert.equal(sent.get('code'), 'the-code');
+  assert.equal(sent.get('code_verifier'), 'the-verifier');
+  assert.equal(sent.get('redirect_uri'), 'http://127.0.0.1:5555');
+  assert.equal(sent.get('grant_type'), 'authorization_code');
+});
+
+test('google: a refresh works without a session on this server', async () => {
+  await start();
+  const answer = await toGoogle('refresh', { refresh_token: 'g-refresh' });
+  assert.equal(answer.status, 200);
+  assert.equal((await answer.json()).access_token, 'g-access');
+  const sent = new URLSearchParams(fake.requests.at(-1).body);
+  assert.equal(sent.get('grant_type'), 'refresh_token');
+  assert.equal(sent.get('refresh_token'), 'g-refresh');
+  assert.equal(sent.get('client_secret'), 'g-secret');
+});
+
+test('google: only a sign-in that is really gone says so', async () => {
+  await start();
+  fake.googleStatus = 400;
+  fake.googleBody = { error: 'invalid_grant', error_description: 'Token has been expired' };
+  const gone = await toGoogle('refresh', { refresh_token: 'old' });
+  assert.equal(gone.status, 400);
+  assert.deepEqual(await gone.json(), { error: 'invalid_grant' });
+
+  // A wrong secret here is not the person's fault, and must not sign them out.
+  fake.googleStatus = 401;
+  fake.googleBody = { error: 'invalid_client', error_description: 'details' };
+  const ours = await toGoogle('refresh', { refresh_token: 'good' });
+  assert.equal(ours.status, 502);
+  assert.deepEqual(await ours.json(), { error: 'failed' });
+});
+
+test('google: nothing goes to google from a bad request', async () => {
+  await start();
+  const before = fake.requests.length;
+  const elsewhere = { ...googleSignIn, redirect_uri: 'https://evil.example/' };
+  assert.equal((await toGoogle('token', elsewhere)).status, 400);
+  assert.equal((await toGoogle('token', { ...googleSignIn, code: '' })).status, 400);
+  assert.equal((await toGoogle('token', null)).status, 400);
+  assert.equal((await toGoogle('refresh', { refresh_token: 7 })).status, 400);
+  assert.equal(fake.requests.length, before);
+});
+
+test('google: a flood from one address is stopped', async () => {
+  await start();
+  const headers = { 'fly-client-ip': '203.0.113.9' };
+  let last;
+  for (let i = 0; i < 21; i += 1) last = await toGoogle('refresh', { refresh_token: 'r' }, headers);
+  assert.equal(last.status, 429);
+});
+
+test('google: without its values it says so', async () => {
+  await start({ withGoogle: false });
+  assert.equal((await toGoogle('token', googleSignIn)).status, 503);
+  assert.equal((await (await fetch(`${base}/health`)).json()).google, false);
 });

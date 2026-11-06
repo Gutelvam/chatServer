@@ -1,4 +1,5 @@
 // Starts the relay from its environment. See README.md for what each value is.
+import { Google } from './google.js';
 import { Kick } from './kick.js';
 import { createRelay } from './server.js';
 import { Store } from './store.js';
@@ -24,6 +25,15 @@ const kick =
       })
     : null;
 
+const google =
+  process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+    ? new Google({
+        clientId: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        tokenUrl: 'https://oauth2.googleapis.com/token',
+      })
+    : null;
+
 let rooms = null;
 if (process.env.TIKTOK_ENABLED === '1') {
   // Loaded only when used: without it, nothing unofficial runs on this server.
@@ -35,9 +45,11 @@ if (process.env.TIKTOK_ENABLED === '1') {
   });
 }
 
-const relay = createRelay({ publicUrl, store, kick, rooms });
+const relay = createRelay({ publicUrl, store, kick, rooms, google });
 relay.server.listen(port, () => {
-  console.log(`relay listening on ${port}; kick: ${Boolean(kick)}; tiktok: ${Boolean(rooms)}`);
+  console.log(
+    `relay listening on ${port}; kick: ${Boolean(kick)}; tiktok: ${Boolean(rooms)}; google: ${Boolean(google)}`,
+  );
 });
 
 for (const signal of ['SIGTERM', 'SIGINT']) {
