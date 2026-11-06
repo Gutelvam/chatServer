@@ -218,6 +218,9 @@ export class Kick {
       title: channel.stream_title ?? '',
       category: channel.category?.name ?? '',
       tags: channel.stream?.custom_tags ?? [],
+      // Off air, the last live's number would say nothing about now.
+      viewers: channel.stream?.is_live ? (channel.stream.viewer_count ?? null) : null,
+      subscribers: channel.active_subscribers_count ?? null,
     };
   }
 

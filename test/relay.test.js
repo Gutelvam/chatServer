@@ -12,7 +12,7 @@ import WebSocket from 'ws';
 import { Kick, toFrame as kickFrame } from '../src/kick.js';
 import { createRelay } from '../src/server.js';
 import { hashToken, Store } from '../src/store.js';
-import { cleanUsername, TikTokRooms, toFrame as tiktokFrame } from '../src/tiktok.js';
+import { cleanUsername, TikTokRooms, toFrame as tiktokFrame, toStats } from '../src/tiktok.js';
 
 const frames = JSON.parse(readFileSync(new URL('./frames.json', import.meta.url), 'utf8'));
 const KEY = 'ab'.repeat(32);
@@ -26,7 +26,7 @@ function sign(id, timestamp, body) {
 }
 
 /** What Kick was asked, and how it answers. */
-const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7, channelStatus: 204, moderationStatus: 200 };
+const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7, channelStatus: 204, moderationStatus: 200, onAir: false };
 let fakeServer;
 let fakeBase;
 let dir;
@@ -94,7 +94,13 @@ before(async () => {
             {
               stream_title: 'Agora',
               category: { id: 2, name: 'VALORANT', thumbnail: 'x' },
-              stream: { custom_tags: ['FPS'], key: 'the-stream-key', is_live: false },
+              active_subscribers_count: 8,
+              stream: {
+                custom_tags: ['FPS'],
+                key: 'the-stream-key',
+                is_live: fake.onAir,
+                viewer_count: 640,
+              },
             },
           ],
         });
@@ -155,6 +161,7 @@ afterEach(async () => {
     user: 7,
     channelStatus: 204,
     moderationStatus: 200,
+    onAir: false,
   });
 });
 
@@ -668,7 +675,13 @@ test('reading a channel needs no new sign-in, and the stream key never leaves', 
   });
   assert.equal(answer.status, 200);
   const text = await answer.text();
-  assert.deepEqual(JSON.parse(text), { title: 'Agora', category: 'VALORANT', tags: ['FPS'] });
+  assert.deepEqual(JSON.parse(text), {
+    title: 'Agora',
+    category: 'VALORANT',
+    tags: ['FPS'],
+    viewers: null,
+    subscribers: 8,
+  });
   assert.ok(!text.includes('the-stream-key'));
   const read = fake.requests.find((r) => r.path === '/public/v1/channels');
   assert.ok(read.url.includes('broadcaster_user_id=7'));
@@ -741,4 +754,52 @@ test('an older sign-in is asked to sign in again for this, and keeps its session
   fake.moderationStatus = 403;
   assert.equal((await moderate(session, { action: 'ban', user_id: '9' })).status, 403);
   assert.ok(store.find(session));
+});
+
+test('on air, a Kick channel says how many are watching', async () => {
+  await start();
+  const session = await signIn();
+  fake.onAir = true;
+  const answer = await fetch(`${base}/kick/channel`, {
+    headers: { Authorization: `Bearer ${session}` },
+  });
+  assert.equal((await answer.json()).viewers, 640);
+});
+
+test('the numbers of a TikTok live are read whatever the library calls them', () => {
+  assert.deepEqual(toStats('roomUser', { total: '1200', totalUser: '9000' }), { viewers: 1200 });
+  assert.deepEqual(toStats('roomUser', { viewerCount: 7 }), { viewers: 7 });
+  assert.deepEqual(toStats('like', { total: '18000', count: 3 }), { likes: 18000 });
+  assert.deepEqual(toStats('like', { totalLikeCount: 5 }), { likes: 5 });
+  assert.deepEqual(toStats('like', { total: 'x' }), { likes: null });
+  assert.deepEqual(toStats('roomUser', {}), { viewers: null });
+  assert.equal(toStats('chat', {}), null);
+});
+
+test('hearts reach the apps at a calm pace, and a new app hears the numbers at once', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const handlers = {};
+  const rooms = new TikTokRooms({
+    maxRooms: 1,
+    connect: () => ({
+      on: (type, handler) => (handlers[type] = handler),
+      connect: async () => {},
+      disconnect: async () => {},
+    }),
+  });
+  const first = [];
+  const leave = rooms.join('someone', (frame) => first.push(frame));
+  await Promise.resolve();
+  for (let i = 1; i <= 50; i += 1) handlers.like({ total: String(i) });
+  handlers.roomUser({ total: '10' });
+  assert.equal(first.filter((f) => f.kind === 'stats').length, 0, 'not yet');
+  t.mock.timers.tick(5000);
+  const stats = first.filter((f) => f.kind === 'stats');
+  assert.deepEqual(stats, [{ kind: 'stats', viewers: 10, likes: 50 }], 'one, with the latest');
+
+  const second = [];
+  rooms.join('someone', (frame) => second.push(frame));
+  assert.deepEqual(second.at(-1), { kind: 'stats', viewers: 10, likes: 50 });
+  leave();
+  rooms.closeAll();
 });
