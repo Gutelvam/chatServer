@@ -110,6 +110,7 @@ before(async () => {
               stream: {
                 custom_tags: ['FPS'],
                 key: 'the-stream-key',
+                url: fake.streamUrl,
                 is_live: fake.onAir,
                 viewer_count: 640,
               },
@@ -709,6 +710,38 @@ test('reading a channel needs no new sign-in, and the stream key never leaves', 
   assert.ok(read.url.includes('broadcaster_user_id=7'));
   const asked = fake.requests.filter((r) => r.path === '/oauth/token');
   assert.ok(asked.some((r) => r.body.includes('grant_type=client_credentials')));
+});
+
+const readKey = (session) =>
+  fetch(`${base}/kick/stream-key`, session ? { headers: { Authorization: `Bearer ${session}` } } : {});
+
+test('the stream key goes only to its own signed-in streamer, with their own token', async () => {
+  await start();
+  const session = await signIn();
+  fake.streamUrl = 'rtmps://kick.example/app';
+  assert.equal((await readKey()).status, 401);
+  const answer = await readKey(session);
+  assert.equal(answer.status, 200);
+  assert.equal(answer.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await answer.json(), { key: 'the-stream-key', url: 'rtmps://kick.example/app' });
+  const read = fake.requests.find((r) => r.path === '/public/v1/channels');
+  assert.ok(read.url.includes('broadcaster_user_id=7'));
+  const asked = fake.requests.filter((r) => r.path === '/oauth/token');
+  assert.ok(!asked.some((r) => r.body.includes('grant_type=client_credentials')));
+  const toKick = new URL(
+    (await noRedirect(`${base}/kick/login?state=s&return=${encodeURIComponent('http://127.0.0.1:1/')}`))
+      .headers.get('location'),
+  );
+  assert.ok(toKick.searchParams.get('scope').includes('streamkey:read'));
+});
+
+test('without the key in the answer, an older sign-in is told to sign in again and stays', async () => {
+  await start();
+  const session = await signIn();
+  fake.streamUrl = undefined;
+  const answer = await readKey(session);
+  assert.equal(answer.status, 403);
+  assert.ok(store.find(session), 'the session stays');
 });
 
 test('tags go to Kick within its limits, and are left alone when not sent', async () => {

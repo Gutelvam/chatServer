@@ -277,6 +277,24 @@ export function createRelay({ publicUrl, store, kick, rooms, google = null }) {
   };
 
   /**
+   * The streamer's own stream key, for the app to keep in its vault. It passes through and is not
+   * kept or logged. As with the channel's details, an older sign-in answers 403 and keeps its session.
+   */
+  const streamKey = async (response, session) => {
+    response.setHeader('Cache-Control', 'no-store');
+    try {
+      const found = await kick.streamKey(await freshAccess(session), session.userId);
+      if (!found) return reply(response, 403, { error: 'sign in again to allow this' });
+      reply(response, 200, found);
+    } catch (error) {
+      if (error instanceof KickError && [401, 403].includes(error.status)) {
+        return reply(response, 403, { error: 'sign in again to allow this' });
+      }
+      throw error;
+    }
+  };
+
+  /**
    * What the streamer pressed in the review queue, on their own channel only. As with the channel's
    * details, a sign-in from before this permission answers 403 and keeps its session.
    */
@@ -375,6 +393,7 @@ export function createRelay({ publicUrl, store, kick, rooms, google = null }) {
       'GET /kick/categories',
       'PATCH /kick/channel',
       'GET /kick/channel',
+      'GET /kick/stream-key',
       'POST /kick/moderation',
     ];
     if (needsSession.includes(route)) {
@@ -383,6 +402,7 @@ export function createRelay({ publicUrl, store, kick, rooms, google = null }) {
       if (route === 'GET /kick/categories') return await searchCategories(url, response, session);
       if (route === 'PATCH /kick/channel') return await updateChannel(request, response, session);
       if (route === 'POST /kick/moderation') return await moderate(request, response, session);
+      if (route === 'GET /kick/stream-key') return await streamKey(response, session);
       if (route === 'GET /kick/channel') {
         return reply(response, 200, await kick.channel(session.userId));
       }
