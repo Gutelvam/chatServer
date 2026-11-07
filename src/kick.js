@@ -2,7 +2,7 @@
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 
 export const SCOPES =
-  'user:read chat:write events:subscribe channel:write moderation:ban moderation:chat_message:manage';
+  'user:read chat:write events:subscribe channel:read channel:write streamkey:read moderation:ban moderation:chat_message:manage';
 const EVENTS = [
   'chat.message.sent',
   'channel.followed',
@@ -222,6 +222,17 @@ export class Kick {
       viewers: channel.stream?.is_live ? (channel.stream.viewer_count ?? null) : null,
       subscribers: channel.active_subscribers_count ?? null,
     };
+  }
+
+  /**
+   * The stream's address and key, for the signed-in streamer's own channel, with their own token.
+   * Null when Kick leaves them out, as it may for a sign-in without the permission.
+   */
+  async streamKey(access, userId) {
+    const search = new URLSearchParams({ broadcaster_user_id: userId });
+    const body = await this.#api(`/public/v1/channels?${search}`, access);
+    const { key, url } = body.data?.[0]?.stream ?? {};
+    return key && url ? { key, url } : null;
   }
 
   /** A timeout with `minutes`, a permanent ban without them. */
