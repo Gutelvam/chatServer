@@ -581,6 +581,23 @@ test('tiktok gifts wait for the end of a streak', () => {
   assert.equal(tiktokFrame('roomUser', {}), null);
 });
 
+test('tiktok messages in the newer library shape keep their text, sender and gift', () => {
+  const chat = tiktokFrame('chat', {
+    user: { nickname: 'Ana', displayId: 'ana.live', id: '77' },
+    content: 'oi gente',
+  });
+  assert.equal(chat.content, 'oi gente');
+  assert.equal(chat.author, 'Ana');
+  assert.equal(chat.author_id, '77');
+  const unnamed = tiktokFrame('chat', { user: { displayId: 'ana.live' }, content: 'x' });
+  assert.equal(unnamed.author, 'ana.live');
+  const streak = { user: { nickname: 'Ana' }, gift: { type: 1, name: 'Rose' }, repeatCount: 5 };
+  assert.equal(tiktokFrame('gift', { ...streak, repeatEnd: 0 }), null);
+  assert.equal(tiktokFrame('gift', { ...streak, repeatEnd: 1 }).amount, 'Rose x5');
+  const single = tiktokFrame('gift', { user: { nickname: 'Bia' }, gift: { type: 2, name: 'Lion' } });
+  assert.equal(single.amount, 'Lion');
+});
+
 test('tiktok viewers of a channel share one connection, within a limit', async () => {
   const made = [];
   const tiktok = new TikTokRooms({
