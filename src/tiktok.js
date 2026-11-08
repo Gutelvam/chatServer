@@ -34,9 +34,13 @@ export const cleanUsername = (input) => {
   return /^[a-z0-9._]{1,24}$/.test(name) ? name : null;
 };
 
-/** What a library event means, as the apps receive it. `null` for what they have no use for. */
+/** What a library event means, as the apps receive it. `null` for what they have no use for.
+ * The library's messages changed names between versions (`content` was `comment`, `gift` was
+ * `giftDetails`, `id` was `userId`): both are read, so an update of it does not empty the chat. */
 export function toFrame(type, data) {
-  const user = data.user?.nickname || data.user?.uniqueId || 'Anonymous';
+  const person = data.user ?? {};
+  const user = person.nickname || person.displayId || person.uniqueId || 'Anonymous';
+  const userId = person.id ?? person.userId;
   const id = randomUUID();
   switch (type) {
     case 'chat':
@@ -44,17 +48,19 @@ export function toFrame(type, data) {
         kind: 'chat',
         id,
         author: user,
-        author_id: data.user?.userId != null ? String(data.user.userId) : null,
+        author_id: userId != null && userId !== '' ? String(userId) : null,
         color: null,
-        content: data.comment ?? '',
+        content: data.content || data.comment || '',
         is_owner: false,
         is_moderator: false,
         is_member: false,
       };
     case 'gift': {
       // A streak sends an event per tap: only its end says how much it was.
-      if (data.giftDetails?.giftType === 1 && !data.repeatEnd) return null;
-      const name = data.giftDetails?.giftName ?? 'a gift';
+      const gift = data.gift ?? data.giftDetails ?? {};
+      const streakable = (gift.type ?? gift.giftType) === 1;
+      if (streakable && !data.repeatEnd) return null;
+      const name = gift.name || gift.giftName || 'a gift';
       const times = data.repeatCount ?? 1;
       return {
         kind: 'alert',
