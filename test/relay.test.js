@@ -27,7 +27,7 @@ function sign(id, timestamp, body) {
 }
 
 /** What Kick was asked, and how it answers. */
-const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7, channelStatus: 204, moderationStatus: 200, onAir: false, googleStatus: 200, googleBody: null };
+const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7, channelStatus: 204, moderationStatus: 200, onAir: false, googleStatus: 200, googleBody: null, rewardStatus: 200 };
 let fakeServer;
 let fakeBase;
 let dir;
@@ -125,6 +125,22 @@ before(async () => {
       if (path === '/public/v1/moderation/bans') {
         return json(fake.moderationStatus, { data: {} });
       }
+      if (path.startsWith('/public/v1/channels/rewards')) {
+        if (fake.rewardStatus !== 200) return json(fake.rewardStatus, { message: 'no' });
+        if (path.endsWith('/accept') || path.endsWith('/reject')) return json(200, { data: [] });
+        if (request.method === 'DELETE') {
+          response.writeHead(204);
+          return response.end();
+        }
+        const made = {
+          id: '01KBHE7RZNHB0SKDV1H86CD4F3',
+          title: 'Hydrate',
+          cost: 100,
+          secret_field: 'not for the app',
+          ...(body ? JSON.parse(body) : {}),
+        };
+        return json(200, { data: request.method === 'GET' ? [made] : made });
+      }
       if (path.startsWith('/public/v1/chat/')) {
         response.writeHead(fake.moderationStatus === 200 ? 204 : fake.moderationStatus);
         return response.end();
@@ -185,6 +201,7 @@ afterEach(async () => {
     onAir: false,
     googleStatus: 200,
     googleBody: null,
+    rewardStatus: 200,
   });
 });
 
@@ -376,19 +393,19 @@ test('follows reach the app and the log says so, without saying who', async (t) 
   socket.close();
 });
 
-test('a reward becomes one alert, and a rejected one none', () => {
+test('a reward becomes one alert, and a rejected one an update older apps ignore', () => {
   const { platform: _, ...expected } = frames.reward;
   const redeemed = (status) =>
     kickFrame('channel.reward.redemption.updated', 'webhook-id', {
       id: 'r1',
       status,
       redeemer: { username: 'Ana' },
-      reward: { title: 'Hydrate' },
+      reward: { id: '01KBHE7RZNHB0SKDV1H86CD4F3', title: 'Hydrate' },
       user_input: 'agua',
     });
   assert.deepEqual(redeemed('pending'), expected);
-  assert.deepEqual(redeemed('accepted'), expected);
-  assert.equal(redeemed('rejected'), null);
+  assert.deepEqual(redeemed('accepted'), { ...expected, status: 'accepted' });
+  assert.deepEqual(redeemed('rejected'), { ...expected, event: 'reward_update', status: 'rejected' });
 });
 
 test('a refresh Kick refuses asks the app to sign in again', async () => {
@@ -952,4 +969,76 @@ test('google: without its values it says so', async () => {
   await start({ withGoogle: false });
   assert.equal((await toGoogle('token', googleSignIn)).status, 503);
   assert.equal((await (await fetch(`${base}/health`)).json()).google, false);
+});
+
+const REWARD = '01KBHE7RZNHB0SKDV1H86CD4F3';
+const rewardCall = (session, method, path, body) =>
+  fetch(`${base}/kick/rewards${path}`, {
+    method,
+    headers: session ? { Authorization: `Bearer ${session}` } : {},
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+
+test('rewards are made within Kick limits, and only what a reward is made of leaves', async () => {
+  await start();
+  const session = await signIn();
+  assert.equal((await rewardCall(null, 'GET', '')).status, 401);
+  const made = await rewardCall(session, 'POST', '', {
+    title: `  ${'x'.repeat(80)}  `,
+    cost: 5e12,
+    description: 'Drink water',
+    background_color: 'red',
+    should_redemptions_skip_request_queue: true,
+    is_paused: true,
+    broadcaster_user_id: 1,
+  });
+  assert.equal(made.status, 200);
+  const sent = JSON.parse(fake.requests.find((r) => r.method === 'POST' && r.path.endsWith('/rewards')).body);
+  assert.deepEqual(sent, {
+    title: 'x'.repeat(50),
+    cost: 1_000_000_000,
+    description: 'Drink water',
+    should_redemptions_skip_request_queue: true,
+  });
+  const listed = await (await rewardCall(session, 'GET', '')).json();
+  assert.equal(listed.rewards[0].id, REWARD);
+  assert.equal(listed.rewards[0].secret_field, undefined);
+  assert.equal((await rewardCall(session, 'POST', '', { title: 'No cost' })).status, 400);
+});
+
+test('a reward is changed or removed by its id, and only Kick ids pass', async () => {
+  await start();
+  const session = await signIn();
+  assert.equal((await rewardCall(session, 'PATCH', `/${REWARD}`, { cost: 50 })).status, 200);
+  const patch = fake.requests.find((r) => r.method === 'PATCH');
+  assert.equal(patch.path, `/public/v1/channels/rewards/${REWARD}`);
+  assert.deepEqual(JSON.parse(patch.body), { cost: 50 });
+  assert.equal((await rewardCall(session, 'PATCH', `/${REWARD}`, { nothing: 1 })).status, 400);
+  assert.equal((await rewardCall(session, 'DELETE', `/${REWARD}`)).status, 200);
+  fake.requests.length = 0;
+  assert.equal((await rewardCall(session, 'DELETE', '/..%2Fusers')).status, 404);
+  assert.equal((await rewardCall(null, 'DELETE', `/${REWARD}`)).status, 401);
+  assert.ok(!fake.requests.some((r) => r.path.includes('rewards')));
+});
+
+test('one made elsewhere says so, and an older sign-in is asked to sign in again', async () => {
+  await start();
+  const session = await signIn();
+  fake.rewardStatus = 403;
+  assert.equal((await rewardCall(session, 'PATCH', `/${REWARD}`, { cost: 5 })).status, 409);
+  assert.equal((await rewardCall(session, 'GET', '')).status, 403);
+  fake.rewardStatus = 400;
+  assert.equal((await rewardCall(session, 'POST', '', { title: 'Hydrate', cost: 5 })).status, 400);
+  assert.ok(store.find(session), 'keeps its session');
+});
+
+test('redemptions are accepted or rejected in small groups of real ids', async () => {
+  await start();
+  const session = await signIn();
+  const ok = await rewardCall(session, 'POST', '/redemptions', { accept: false, ids: [REWARD, REWARD, 'x'] });
+  assert.equal(ok.status, 200);
+  const sent = fake.requests.find((r) => r.path.endsWith('/reject'));
+  assert.deepEqual(JSON.parse(sent.body), { ids: [REWARD] });
+  assert.equal((await rewardCall(session, 'POST', '/redemptions', { accept: true, ids: [] })).status, 400);
+  assert.equal((await rewardCall(session, 'POST', '/redemptions', { ids: [REWARD] })).status, 400);
 });

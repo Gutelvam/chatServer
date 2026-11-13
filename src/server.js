@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 
-import { KickError, newPkce, safeName, toFrame } from './kick.js';
+import { isRewardId, KickError, newPkce, rewardChanges, safeName, toFrame } from './kick.js';
 import { newToken } from './store.js';
 import { cleanUsername } from './tiktok.js';
 
@@ -22,6 +22,8 @@ const MAX_CATEGORY_LETTERS = 100;
 const MAX_TAGS = 10;
 const MAX_TIMEOUT_MINUTES = 10080;
 const MAX_TAG_LETTERS = 25;
+/** Kick takes this many redemptions at once. */
+const MAX_REDEMPTIONS = 25;
 /** Sign-ins and TikTok connections allowed from one address, per minute. */
 const RATE_PER_MINUTE = 20;
 const TIKTOK_PER_ADDRESS = 3;
@@ -327,6 +329,51 @@ export function createRelay({ publicUrl, store, kick, rooms, google = null }) {
     }
   };
 
+  /**
+   * The channel's rewards: listed, made, changed and removed from the app. As with the channel's
+   * details, a sign-in from before this permission answers 403 and keeps its session. Changing a
+   * reward made elsewhere answers 409: Kick lets only the app that made it touch it.
+   */
+  const rewards = async (request, response, session, route, id) => {
+    const access = await freshAccess(session);
+    try {
+      if (route === 'GET /kick/rewards') {
+        return reply(response, 200, { rewards: await kick.rewards(access) });
+      }
+      if (route === 'POST /kick/rewards/redemptions') {
+        const { accept, ids } = await readJson(request);
+        const valid = Array.isArray(ids) ? [...new Set(ids.filter(isRewardId))] : [];
+        if (typeof accept !== 'boolean' || valid.length === 0 || valid.length > MAX_REDEMPTIONS) {
+          return reply(response, 400, { error: 'bad request' });
+        }
+        return reply(response, 200, { failed: await kick.resolveRedemptions(access, accept, valid) });
+      }
+      if (route === 'POST /kick/rewards') {
+        const changes = rewardChanges(await readJson(request), { creating: true });
+        if (!changes) return reply(response, 400, { error: 'a reward needs a title and a cost' });
+        return reply(response, 200, { reward: await kick.createReward(access, changes) });
+      }
+      if (route === 'PATCH /kick/rewards/:id') {
+        const changes = rewardChanges(await readJson(request), { creating: false });
+        if (!changes) return reply(response, 400, { error: 'nothing to change' });
+        return reply(response, 200, { reward: await kick.updateReward(access, id, changes) });
+      }
+      await kick.deleteReward(access, id);
+      reply(response, 200, {});
+    } catch (error) {
+      if (!(error instanceof KickError)) throw error;
+      const byId = route.endsWith(':id');
+      if (byId && error.status === 403) return reply(response, 409, { error: 'not made here' });
+      if (byId && error.status === 404) return reply(response, 404, { error: 'not found' });
+      if ([401, 403].includes(error.status)) {
+        return reply(response, 403, { error: 'sign in again to allow this' });
+      }
+      // A title already used, or 50 rewards already: Kick's name for it, nothing more.
+      if (error.status === 400) return reply(response, 400, { error: 'refused' });
+      throw error;
+    }
+  };
+
   /** The one step of Google's sign-in that needs the secret. What passes through is not kept. */
   const googleToken = async (request, response, route) => {
     if (limited(request)) return reply(response, 429, { error: 'too many attempts' });
@@ -387,6 +434,17 @@ export function createRelay({ publicUrl, store, kick, rooms, google = null }) {
     if (route === 'POST /kick/claim') return await claim(request, response);
     const token = bearer(request);
     const session = token && store.find(token);
+    const rewardId = url.pathname.match(/^\/kick\/rewards\/([^/]+)$/)?.[1];
+    if (rewardId && rewardId !== 'redemptions' && ['PATCH', 'DELETE'].includes(request.method)) {
+      if (!session) return reply(response, 401, { error: 'sign in again' });
+      if (!isRewardId(rewardId)) return reply(response, 404, { error: 'not found' });
+      return await rewards(request, response, session, `${request.method} /kick/rewards/:id`, rewardId);
+    }
+    const rewardRoutes = ['GET /kick/rewards', 'POST /kick/rewards', 'POST /kick/rewards/redemptions'];
+    if (rewardRoutes.includes(route)) {
+      if (!session) return reply(response, 401, { error: 'sign in again' });
+      return await rewards(request, response, session, route);
+    }
     const needsSession = [
       'POST /kick/chat',
       'DELETE /kick/session',

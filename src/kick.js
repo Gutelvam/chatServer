@@ -2,7 +2,7 @@
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 
 export const SCOPES =
-  'user:read chat:write events:subscribe channel:read channel:write streamkey:read moderation:ban moderation:chat_message:manage';
+  'user:read chat:write events:subscribe channel:read channel:write streamkey:read moderation:ban moderation:chat_message:manage channel:rewards:write';
 const EVENTS = [
   'chat.message.sent',
   'channel.followed',
@@ -15,6 +15,57 @@ const EVENTS = [
 /** Refresh a token this long before it expires. */
 const EXPIRY_MARGIN_MS = 60_000;
 const KEY_MAX_AGE_MS = 60 * 60 * 1000;
+/** Kick's own limits for a reward. */
+const MAX_REWARD_TITLE = 50;
+const MAX_REWARD_DESCRIPTION = 200;
+const MAX_REWARD_COST = 1_000_000_000;
+const REWARD_FLAGS = [
+  'is_enabled',
+  'is_paused',
+  'is_user_input_required',
+  'should_redemptions_skip_request_queue',
+];
+/** Kick's ids for rewards and redemptions. */
+export const isRewardId = (value) => /^[0-9A-Za-z]{26}$/.test(value ?? '');
+
+/**
+ * Only what a reward is made of, within Kick's limits, from what the app sent. `null` when a new
+ * reward lacks its title or cost, or nothing is left to change.
+ */
+export function rewardChanges(input, { creating }) {
+  const body = {};
+  if (typeof input?.title === 'string' && input.title.trim()) {
+    body.title = input.title.trim().slice(0, MAX_REWARD_TITLE);
+  }
+  const cost = Number(input?.cost);
+  if (Number.isSafeInteger(cost) && cost >= 1) body.cost = Math.min(cost, MAX_REWARD_COST);
+  if (typeof input?.description === 'string') {
+    body.description = input.description.trim().slice(0, MAX_REWARD_DESCRIPTION);
+  }
+  if (/^#[0-9a-fA-F]{6}$/.test(input?.background_color ?? '')) {
+    body.background_color = input.background_color;
+  }
+  for (const flag of REWARD_FLAGS) {
+    if (typeof input?.[flag] === 'boolean') body[flag] = input[flag];
+  }
+  if (creating) {
+    delete body.is_paused;
+    return body.title && body.cost ? body : null;
+  }
+  return Object.keys(body).length > 0 ? body : null;
+}
+
+const rewardOf = (reward) => ({
+  id: reward.id,
+  title: reward.title ?? '',
+  cost: reward.cost ?? 0,
+  description: reward.description ?? '',
+  background_color: reward.background_color ?? null,
+  is_enabled: reward.is_enabled ?? true,
+  is_paused: reward.is_paused ?? false,
+  is_user_input_required: reward.is_user_input_required ?? false,
+  should_redemptions_skip_request_queue: reward.should_redemptions_skip_request_queue ?? false,
+});
 
 const base64url = (bytes) => Buffer.from(bytes).toString('base64url');
 
@@ -260,6 +311,43 @@ export class Kick {
     });
   }
 
+  /** The channel's rewards, made here or on Kick. */
+  async rewards(access) {
+    const body = await this.#api('/public/v1/channels/rewards', access);
+    return (body.data ?? []).map(rewardOf);
+  }
+
+  async createReward(access, changes) {
+    const body = await this.#api('/public/v1/channels/rewards', access, {
+      method: 'POST',
+      body: JSON.stringify(changes),
+    });
+    return rewardOf(body.data ?? {});
+  }
+
+  /** Kick lets only the app that made a reward change it, and answers 403 to the others. */
+  async updateReward(access, id, changes) {
+    const body = await this.#api(`/public/v1/channels/rewards/${id}`, access, {
+      method: 'PATCH',
+      body: JSON.stringify(changes),
+    });
+    return rewardOf(body.data ?? {});
+  }
+
+  deleteReward(access, id) {
+    return this.#api(`/public/v1/channels/rewards/${id}`, access, { method: 'DELETE' });
+  }
+
+  /** Accepts or rejects redemptions that wait. Kick refunds the rejected ones itself. */
+  async resolveRedemptions(access, accept, ids) {
+    const body = await this.#api(
+      `/public/v1/channels/rewards/redemptions/${accept ? 'accept' : 'reject'}`,
+      access,
+      { method: 'POST', body: JSON.stringify({ ids }) },
+    );
+    return (body?.data ?? []).map((failed) => failed.id).filter(Boolean);
+  }
+
   updateChannel(access, changes) {
     return this.#api('/public/v1/channels', access, {
       method: 'PATCH',
@@ -334,11 +422,14 @@ export function toFrame(type, id, event) {
       });
     case 'channel.reward.redemption.updated':
       // Pending, then accepted, or accepted at once: the same id makes it one alert in the app.
-      if (event.status === 'rejected') return null;
-      return alert('reward', event.redeemer, {
+      // A rejected one is no alert: older apps do not know `reward_update`, and ignore it.
+      return alert(event.status === 'rejected' ? 'reward_update' : 'reward', event.redeemer, {
         id: `reward-${event.id}`,
         amount: event.reward?.title ?? null,
         message: event.user_input || null,
+        reward_id: event.reward?.id ?? null,
+        redemption_id: event.id ?? null,
+        status: ['pending', 'accepted', 'rejected'].includes(event.status) ? event.status : null,
       });
     default:
       return null;

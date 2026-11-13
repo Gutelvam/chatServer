@@ -50,7 +50,10 @@
     "user": "Ana",
     "amount": "Hydrate",
     "count": null,
-    "message": "agua"
+    "message": "agua",
+    "reward_id": "01KBHE7RZNHB0SKDV1H86CD4F3",
+    "redemption_id": "r1",
+    "status": "pending"
   },
   "status": { "platform": "tiktok", "kind": "status", "live": false },
   "stats": { "platform": "tiktok", "kind": "stats", "viewers": 1200, "likes": 18000 },
