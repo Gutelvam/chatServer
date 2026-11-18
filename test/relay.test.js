@@ -1,7 +1,7 @@
 // The whole relay against a stand-in for Kick and for the TikTok library: nothing here reaches the
 // internet, and no account is needed.
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, createSign } from 'node:crypto';
+import { createHash, generateKeyPairSync, createSign } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -428,12 +428,69 @@ test('a session is only ever handed to this computer', async () => {
     'http://127.0.0.1.evil.example:80/',
     'http://localhost:5555/',
     'http://127.0.0.1:5555/@evil.example',
+    'http://127.0.0.1:5555/callback',
+    'http://127.0.0.1:0/',
+    'http://127.0.0.1:65536/',
+    'http://127.0.0.1:05555/',
+    'http://127.0.0.1/',
+    'http://127.0.0.1:5555/?x=https://evil.example/',
+    'javascript://127.0.0.1:5555/',
+    '//evil.example/',
   ]) {
     const response = await noRedirect(
       `${base}/kick/login?state=s&return=${encodeURIComponent(target)}`,
     );
     assert.equal(response.status, 400, target);
   }
+});
+
+test('a code from an app that sent a challenge is worth nothing without its verifier', async () => {
+  await start();
+  const verifier = 'v'.repeat(64);
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  const signInWith = async () => {
+    const begin = await noRedirect(
+      `${base}/kick/login?state=a&code_challenge=${challenge}&return=${encodeURIComponent('http://127.0.0.1:5555/')}`,
+    );
+    assert.equal(begin.status, 302);
+    const state = new URL(begin.headers.get('location')).searchParams.get('state');
+    const back = await noRedirect(`${base}/kick/callback?code=c&state=${state}`);
+    return new URL(back.headers.get('location')).searchParams.get('code');
+  };
+  const post = (body) =>
+    fetch(`${base}/kick/claim`, { method: 'POST', body: JSON.stringify(body) });
+  // Without it, or with another, the code is spent and nothing is handed out.
+  const stolen = await signInWith();
+  assert.equal((await post({ code: stolen })).status, 400);
+  assert.equal((await post({ code: stolen, code_verifier: verifier })).status, 400);
+  const guessed = await signInWith();
+  assert.equal((await post({ code: guessed, code_verifier: 'w'.repeat(64) })).status, 400);
+  assert.equal(store.size, 0);
+  const own = await signInWith();
+  const answer = await post({ code: own, code_verifier: verifier });
+  assert.equal(answer.status, 200);
+  assert.equal(store.size, 1);
+  const bad = await noRedirect(
+    `${base}/kick/login?state=a&code_challenge=short&return=${encodeURIComponent('http://127.0.0.1:5555/')}`,
+  );
+  assert.equal(bad.status, 400);
+});
+
+test('a session left unused for months stops working, one in use keeps going', () => {
+  dir = mkdtempSync(join(tmpdir(), 'relay-'));
+  let now = 1_000_000_000_000;
+  const day = 24 * 60 * 60 * 1000;
+  const sessions = new Store(dir, KEY, { idleMs: 30 * day, now: () => now });
+  const account = { userId: 1, name: 'n', tokens: { access: 'a' }, subscriptionIds: [] };
+  const used = sessions.create(account);
+  const idle = sessions.create(account);
+  for (let i = 0; i < 3; i += 1) {
+    now += 20 * day;
+    assert.ok(sessions.find(used), 'in use, so still there');
+  }
+  assert.equal(sessions.find(idle), null);
+  assert.equal(new Store(dir, KEY, { idleMs: 30 * day, now: () => now }).size, 1);
+  relay = null;
 });
 
 test('a sign-in cannot be finished twice or made up', async () => {

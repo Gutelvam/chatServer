@@ -8,20 +8,29 @@ import { dirname, join } from 'node:path';
 export const hashToken = (token) => createHash('sha256').update(token).digest('hex');
 export const newToken = () => randomBytes(32).toString('base64url');
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** A session nobody has used for this long is gone: a stolen copy does not work forever. */
+export const SESSION_IDLE_MS = 90 * DAY_MS;
+
 export class Store {
   #path;
   #key;
   #sessions = new Map();
+  #idleMs;
+  #now;
 
-  /** `key`: 32 bytes as hex. */
-  constructor(dataDir, key) {
+  /** `key`: 32 bytes as hex. `idleMs` and `now` are for tests. */
+  constructor(dataDir, key, { idleMs = SESSION_IDLE_MS, now = Date.now } = {}) {
+    this.#idleMs = idleMs;
+    this.#now = now;
     this.#path = join(dataDir, 'sessions.json');
     this.#key = Buffer.from(key, 'hex');
     if (this.#key.length !== 32) throw new Error('DATA_KEY must be 32 bytes in hex');
     mkdirSync(dirname(this.#path), { recursive: true });
     try {
       for (const [hash, session] of JSON.parse(readFileSync(this.#path, 'utf8'))) {
-        this.#sessions.set(hash, session);
+        // Sessions from before idle expiry start counting from this start.
+        this.#sessions.set(hash, { ...session, seenAt: session.seenAt ?? this.#now() });
       }
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
@@ -57,6 +66,7 @@ export class Store {
       name,
       tokens: this.#seal(tokens),
       subscriptionIds,
+      seenAt: this.#now(),
     });
     this.#save();
     return token;
@@ -65,7 +75,18 @@ export class Store {
   find(token) {
     const hash = hashToken(token);
     const session = this.#sessions.get(hash);
-    return session ? { hash, ...session } : null;
+    if (!session) return null;
+    const now = this.#now();
+    if (now - session.seenAt > this.#idleMs) {
+      this.remove(hash);
+      return null;
+    }
+    // Written at most once a day per session, not on every message.
+    if (now - session.seenAt > DAY_MS) {
+      session.seenAt = now;
+      this.#save();
+    }
+    return { hash, ...session };
   }
 
   tokensOf(session) {

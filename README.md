@@ -51,9 +51,9 @@ A criação da app no Kick e os limites de cada plataforma estão em `docs/platf
 | Pedido | Para quê |
 |---|---|
 | `GET /health` | Verificar se está de pé |
-| `GET /kick/login?state&return` | Começar o login. `return` só aceita `http://127.0.0.1:<porta>/` |
+| `GET /kick/login?state&return[&code_challenge]` | Começar o login. `return` só aceita `http://127.0.0.1:<porta>/`. `code_challenge` (opcional, S256 base64url) obriga o `claim` a trazer o `code_verifier` |
 | `GET /kick/callback` | Regresso do Kick |
-| `POST /kick/claim` | A aplicação troca o código de uso único pela sessão |
+| `POST /kick/claim` | A aplicação troca o código de uso único (2 min) pela sessão (`{code, code_verifier?}`). Sessões sem uso por 90 dias expiram |
 | `POST /kick/webhook` | Eventos do Kick |
 | `POST /kick/chat` | Enviar uma mensagem, com a sessão |
 | `DELETE /kick/session` | Terminar sessão |

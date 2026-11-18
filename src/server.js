@@ -1,6 +1,6 @@
 // The server: signs people in to Kick with the secret the app cannot hold, receives Kick's
 // webhooks, and passes everything on to each user's app over a WebSocket.
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 
@@ -29,7 +29,21 @@ const RATE_PER_MINUTE = 20;
 const TIKTOK_PER_ADDRESS = 3;
 
 /** The app listens on this computer's own address, and nothing else may receive a session. */
-const isLoopback = (url) => /^http:\/\/127\.0\.0\.1:\d{1,5}\/?$/.test(url ?? '');
+export function isLoopback(url) {
+  const found = /^http:\/\/127\.0\.0\.1:([1-9]\d{0,4})\/?$/.exec(url ?? '');
+  return found !== null && Number(found[1]) <= 65535;
+}
+
+/** An app's own PKCE challenge for the relay's code: S256 of a verifier, in base64url. */
+const isChallenge = (value) => /^[A-Za-z0-9_-]{43}$/.test(value ?? '');
+
+/** Whether `verifier` is the one the app committed to with `challenge` when it started. */
+function verifies(challenge, verifier) {
+  if (typeof verifier !== 'string' || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) return false;
+  const computed = Buffer.from(createHash('sha256').update(verifier).digest('base64url'));
+  const expected = Buffer.from(challenge);
+  return computed.length === expected.length && timingSafeEqual(computed, expected);
+}
 
 function reply(response, status, body) {
   const text = body === undefined ? '' : JSON.stringify(body);
@@ -128,14 +142,22 @@ export function createRelay({ publicUrl, store, kick, rooms, google = null }) {
     const appReturn = url.searchParams.get('return');
     const appState = url.searchParams.get('state');
     if (!kick) return reply(response, 503, { error: 'kick is not set up' });
-    if (!isLoopback(appReturn) || !appState) return reply(response, 400, { error: 'bad request' });
+    // Optional for now: an app that sends one must prove it with the verifier when it claims,
+    // so a code read from the browser's history or by another program is worth nothing.
+    const appChallenge = url.searchParams.get('code_challenge');
+    if (!isLoopback(appReturn) || !appState || appState.length > 512) {
+      return reply(response, 400, { error: 'bad request' });
+    }
+    if (appChallenge !== null && !isChallenge(appChallenge)) {
+      return reply(response, 400, { error: 'bad request' });
+    }
     const now = Date.now();
     for (const [key, login] of logins) {
       if (now - login.at > LOGIN_TTL_MS) logins.delete(key);
     }
     const state = randomBytes(24).toString('base64url');
     const { verifier, challenge } = newPkce();
-    logins.set(state, { appReturn, appState, verifier, at: now });
+    logins.set(state, { appReturn, appState, appChallenge, verifier, at: now });
     response.writeHead(302, { Location: kick.authorizeUrl({ state, challenge, redirect }) });
     response.end();
   };
@@ -166,7 +188,14 @@ export function createRelay({ publicUrl, store, kick, rooms, google = null }) {
       for (const [key, entry] of handoffs) {
         if (now - entry.at > HANDOFF_TTL_MS) handoffs.delete(key);
       }
-      handoffs.set(handoff, { userId, name, tokens, subscriptionIds, at: now });
+      handoffs.set(handoff, {
+        userId,
+        name,
+        tokens,
+        subscriptionIds,
+        appChallenge: login.appChallenge,
+        at: now,
+      });
       back.searchParams.set('code', handoff);
     } catch (error) {
       // Our own message or a network failure's code: nothing from the request itself.
@@ -180,13 +209,17 @@ export function createRelay({ publicUrl, store, kick, rooms, google = null }) {
   };
 
   const claim = async (request, response) => {
-    const { code } = await readJson(request);
-    const entry = handoffs.get(code);
+    if (limited(request)) return reply(response, 429, { error: 'too many attempts' });
+    const { code, code_verifier: verifier } = await readJson(request);
+    const entry = typeof code === 'string' ? handoffs.get(code) : undefined;
     handoffs.delete(code);
     if (!entry || Date.now() - entry.at > HANDOFF_TTL_MS) {
       return reply(response, 400, { error: 'this sign-in has expired, try again' });
     }
-    const { at: _, ...account } = entry;
+    if (entry.appChallenge && !verifies(entry.appChallenge, verifier)) {
+      return reply(response, 400, { error: 'this sign-in has expired, try again' });
+    }
+    const { at: _, appChallenge: __, ...account } = entry;
     reply(response, 200, { session: store.create(account), name: entry.name });
   };
 
