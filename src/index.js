@@ -1,5 +1,5 @@
 // Starts the relay from its environment. See README.md for what each value is.
-import { Google } from './google.js';
+import { Google, GoogleClients } from './google.js';
 import { Kick } from './kick.js';
 import { createRelay } from './server.js';
 import { Store } from './store.js';
@@ -25,14 +25,18 @@ const kick =
       })
     : null;
 
-const google =
-  process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
-    ? new Google({
-        clientId: process.env.GOOGLE_CLIENT_ID,
-        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-        tokenUrl: 'https://oauth2.googleapis.com/token',
-      })
-    : null;
+const googleTokenUrl = 'https://oauth2.googleapis.com/token';
+const googleClients = new GoogleClients();
+// GOOGLE_CLIENT_ID stays the default for apps that don't say which client they use; *_2 is the next
+// one (EZ Stream project), used by apps that send its id.
+for (const suffix of ['', '_2']) {
+  const clientId = process.env[`GOOGLE_CLIENT_ID${suffix}`];
+  const clientSecret = process.env[`GOOGLE_CLIENT_SECRET${suffix}`];
+  if (clientId && clientSecret) {
+    googleClients.add(clientId, new Google({ clientId, clientSecret, tokenUrl: googleTokenUrl }));
+  }
+}
+const google = googleClients.size ? googleClients : null;
 
 let rooms = null;
 if (process.env.TIKTOK_ENABLED === '1') {
@@ -48,7 +52,7 @@ if (process.env.TIKTOK_ENABLED === '1') {
 const relay = createRelay({ publicUrl, store, kick, rooms, google });
 relay.server.listen(port, () => {
   console.log(
-    `relay listening on ${port}; kick: ${Boolean(kick)}; tiktok: ${Boolean(rooms)}; google: ${Boolean(google)}`,
+    `relay listening on ${port}; kick: ${Boolean(kick)}; tiktok: ${Boolean(rooms)}; google: ${googleClients.size}`,
   );
 });
 

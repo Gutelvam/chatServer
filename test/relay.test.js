@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { after, afterEach, before, test } from 'node:test';
 import WebSocket from 'ws';
 
-import { Google } from '../src/google.js';
+import { Google, GoogleClients } from '../src/google.js';
 import { Kick, toFrame as kickFrame } from '../src/kick.js';
 import { createRelay } from '../src/server.js';
 import { hashToken, Store } from '../src/store.js';
@@ -173,11 +173,9 @@ async function start({ tiktok, withGoogle = true } = {}) {
   base = `http://127.0.0.1:${port}`;
   wsBase = `ws://127.0.0.1:${port}`;
   const google = withGoogle
-    ? new Google({
-        clientId: 'g-client',
-        clientSecret: 'g-secret',
-        tokenUrl: `${fakeBase}/google-token`,
-      })
+    ? new GoogleClients()
+        .add('g-client', new Google({ clientId: 'g-client', clientSecret: 'g-secret', tokenUrl: `${fakeBase}/google-token` }))
+        .add('g-client-2', new Google({ clientId: 'g-client-2', clientSecret: 'g-secret-2', tokenUrl: `${fakeBase}/google-token` }))
     : null;
   relay = createRelay({ publicUrl: base, store, kick, rooms: tiktok ?? null, google });
   await new Promise((resolve) => relay.server.listen(port, '127.0.0.1', resolve));
@@ -985,6 +983,21 @@ test('google: a refresh works without a session on this server', async () => {
   assert.equal(sent.get('grant_type'), 'refresh_token');
   assert.equal(sent.get('refresh_token'), 'g-refresh');
   assert.equal(sent.get('client_secret'), 'g-secret');
+});
+
+test('google: an app that names the second client signs in and refreshes with it', async () => {
+  await start();
+  assert.equal((await toGoogle('token', { ...googleSignIn, client_id: 'g-client-2' })).status, 200);
+  let sent = new URLSearchParams(fake.requests.at(-1).body);
+  assert.equal(sent.get('client_id'), 'g-client-2');
+  assert.equal(sent.get('client_secret'), 'g-secret-2');
+  assert.equal((await toGoogle('refresh', { refresh_token: 'g-refresh', client_id: 'g-client-2' })).status, 200);
+  sent = new URLSearchParams(fake.requests.at(-1).body);
+  assert.equal(sent.get('client_secret'), 'g-secret-2');
+  // Apps that name an unknown client (or none) keep the first one.
+  assert.equal((await toGoogle('refresh', { refresh_token: 'g-refresh', client_id: 'nope' })).status, 200);
+  sent = new URLSearchParams(fake.requests.at(-1).body);
+  assert.equal(sent.get('client_id'), 'g-client');
 });
 
 test('google: only a sign-in that is really gone says so', async () => {

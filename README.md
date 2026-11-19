@@ -41,7 +41,8 @@ A criação da app no Kick e os limites de cada plataforma estão em `docs/platf
 | `DATA_KEY` | Sim | 32 bytes em hexadecimal, que cifram os logins guardados |
 | `DATA_DIR` | Não | Onde guardar os dados. Por omissão, `/data` |
 | `KICK_CLIENT_ID`, `KICK_CLIENT_SECRET` | Para o Kick | A app criada no Kick |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Para o YouTube | A app criada na Google. O `scripts/move-google-secret.ps1` do repositório da aplicação coloca-os aqui |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Para o YouTube | A app criada na Google. O `scripts/move-google-secret.ps1` do repositório da aplicação coloca-os aqui. É o cliente usado pelas apps que não dizem qual usam |
+| `GOOGLE_CLIENT_ID_2`, `GOOGLE_CLIENT_SECRET_2` | Opcional | Um segundo cliente da Google, para mudar de cliente sem desligar ninguém: as apps que enviam `client_id` igual a este usam-no |
 | `TIKTOK_ENABLED` | Para o TikTok | `1` para ligar. Sem isto, a biblioteca não oficial nem é carregada |
 | `TIKTOK_MAX_ROOMS` | Não | Canais do TikTok ao mesmo tempo. Por omissão, 20 |
 | `TIKTOK_SIGN_API_KEY` | Não | Chave do serviço de assinaturas |

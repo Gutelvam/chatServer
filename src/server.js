@@ -412,15 +412,17 @@ export function createRelay({ publicUrl, store, kick, rooms, google = null }) {
     if (limited(request)) return reply(response, 429, { error: 'too many attempts' });
     const body = (await readJson(request)) ?? {};
     const text = (value) => typeof value === 'string' && value.length > 0;
+    // The app may name the client it signed in with; a refresh must use that same client.
+    const client = typeof google.for === 'function' ? google.for(body.client_id) : google;
     let answer;
     if (route === 'POST /google/refresh') {
       if (!text(body.refresh_token)) return reply(response, 400, { error: 'bad request' });
-      answer = await google.refresh(body.refresh_token);
+      answer = await client.refresh(body.refresh_token);
     } else {
       if (!text(body.code) || !text(body.code_verifier) || !isLoopback(body.redirect_uri)) {
         return reply(response, 400, { error: 'bad request' });
       }
-      answer = await google.exchange({
+      answer = await client.exchange({
         code: body.code,
         verifier: body.code_verifier,
         redirect: body.redirect_uri,

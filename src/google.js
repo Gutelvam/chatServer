@@ -52,3 +52,35 @@ export class Google {
     return this.#token({ grant_type: 'refresh_token', refresh_token: refreshToken });
   }
 }
+
+/**
+ * Several Google clients at once, so the client can change without signing anyone out: an app
+ * names the client it signed in with (`client_id`), and apps that name none keep the first one.
+ */
+export class GoogleClients {
+  #byId = new Map();
+  #first = null;
+
+  add(clientId, google) {
+    this.#byId.set(clientId, google);
+    this.#first ??= google;
+    return this;
+  }
+
+  get size() {
+    return this.#byId.size;
+  }
+
+  /** Unknown ids fall back to the first client, as before this existed. */
+  for(clientId) {
+    return (typeof clientId === 'string' && this.#byId.get(clientId)) || this.#first;
+  }
+
+  exchange(fields) {
+    return this.#first.exchange(fields);
+  }
+
+  refresh(refreshToken) {
+    return this.#first.refresh(refreshToken);
+  }
+}
