@@ -4,6 +4,7 @@ import { Kick } from './kick.js';
 import { createRelay } from './server.js';
 import { Store } from './store.js';
 import { TikTokRooms } from './tiktok.js';
+import { TikTokLogin, TikTokLogins } from './tiktok-login.js';
 
 const required = (name) => {
   const value = process.env[name];
@@ -38,6 +39,26 @@ for (const suffix of ['', '_2']) {
 }
 const google = googleClients.size ? googleClients : null;
 
+// Sign in with TikTok (Login Kit). TIKTOK_CLIENT_KEY stays the default for apps that don't say
+// which app they use; *_2 is a second one (sandbox and production at once).
+const tiktokLogins = new TikTokLogins();
+for (const suffix of ['', '_2']) {
+  const clientKey = process.env[`TIKTOK_CLIENT_KEY${suffix}`];
+  const clientSecret = process.env[`TIKTOK_CLIENT_SECRET${suffix}`];
+  if (clientKey && clientSecret) {
+    tiktokLogins.add(
+      clientKey,
+      new TikTokLogin({
+        clientKey,
+        clientSecret,
+        tokenUrl: 'https://open.tiktokapis.com/v2/oauth/token/',
+        revokeUrl: 'https://open.tiktokapis.com/v2/oauth/revoke/',
+      }),
+    );
+  }
+}
+const tiktokLogin = tiktokLogins.size ? tiktokLogins : null;
+
 let rooms = null;
 if (process.env.TIKTOK_ENABLED === '1') {
   // Loaded only when used: without it, nothing unofficial runs on this server.
@@ -49,10 +70,10 @@ if (process.env.TIKTOK_ENABLED === '1') {
   });
 }
 
-const relay = createRelay({ publicUrl, store, kick, rooms, google });
+const relay = createRelay({ publicUrl, store, kick, rooms, google, tiktokLogin });
 relay.server.listen(port, () => {
   console.log(
-    `relay listening on ${port}; kick: ${Boolean(kick)}; tiktok: ${Boolean(rooms)}; google: ${googleClients.size}`,
+    `relay listening on ${port}; kick: ${Boolean(kick)}; tiktok: ${Boolean(rooms)}; google: ${googleClients.size}; tiktok sign-in: ${tiktokLogins.size}`,
   );
 });
 

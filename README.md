@@ -43,6 +43,8 @@ A criação da app no Kick e os limites de cada plataforma estão em `docs/platf
 | `KICK_CLIENT_ID`, `KICK_CLIENT_SECRET` | Para o Kick | A app criada no Kick |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Para o YouTube | A app criada na Google. O `scripts/move-google-secret.ps1` do repositório da aplicação coloca-os aqui. É o cliente usado pelas apps que não dizem qual usam |
 | `GOOGLE_CLIENT_ID_2`, `GOOGLE_CLIENT_SECRET_2` | Opcional | Um segundo cliente da Google, para mudar de cliente sem desligar ninguém: as apps que enviam `client_id` igual a este usam-no |
+| `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET` | Para o login com o TikTok | A app no TikTok for Developers (Login Kit for Desktop). É a usada pelas apps que não dizem qual usam |
+| `TIKTOK_CLIENT_KEY_2`, `TIKTOK_CLIENT_SECRET_2` | Opcional | Uma segunda app do TikTok (por exemplo sandbox e produção ao mesmo tempo): as apps que enviam `client_key` igual a esta usam-na |
 | `TIKTOK_ENABLED` | Para o TikTok | `1` para ligar. Sem isto, a biblioteca não oficial nem é carregada |
 | `TIKTOK_MAX_ROOMS` | Não | Canais do TikTok ao mesmo tempo. Por omissão, 20 |
 | `TIKTOK_SIGN_API_KEY` | Não | Chave do serviço de assinaturas |
@@ -60,6 +62,9 @@ A criação da app no Kick e os limites de cada plataforma estão em `docs/platf
 | `DELETE /kick/session` | Terminar sessão |
 | `POST /google/token` | Troca o código do login da Google por tokens, juntando o segredo. Não guarda nada |
 | `POST /google/refresh` | Renova o acesso ao YouTube, da mesma forma |
+| `POST /tiktok/token` | Troca o código do login do TikTok por tokens, juntando o segredo (`{code, code_verifier, redirect_uri, client_key?}`). Devolve só `access_token`, `expires_in`, `refresh_token`, `refresh_expires_in` e `open_id`. Não guarda nada |
+| `POST /tiktok/refresh` | Renova o acesso ao TikTok (`{refresh_token, client_key?}`) |
+| `POST /tiktok/revoke` | Termina o login no TikTok (`{token, client_key?}`) |
 | WS `/kick/stream` | Mensagens e eventos da conta, com a sessão |
 | WS `/tiktok/stream?username=` | Mensagens e eventos de um canal do TikTok |
 

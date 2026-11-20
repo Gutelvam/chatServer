@@ -10,6 +10,7 @@ import { after, afterEach, before, test } from 'node:test';
 import WebSocket from 'ws';
 
 import { Google, GoogleClients } from '../src/google.js';
+import { TikTokLogin, TikTokLogins } from '../src/tiktok-login.js';
 import { Kick, toFrame as kickFrame } from '../src/kick.js';
 import { createRelay } from '../src/server.js';
 import { hashToken, Store } from '../src/store.js';
@@ -27,7 +28,7 @@ function sign(id, timestamp, body) {
 }
 
 /** What Kick was asked, and how it answers. */
-const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7, channelStatus: 204, moderationStatus: 200, onAir: false, googleStatus: 200, googleBody: null, rewardStatus: 200 };
+const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7, channelStatus: 204, moderationStatus: 200, onAir: false, googleStatus: 200, googleBody: null, rewardStatus: 200, tiktokStatus: 200, tiktokBody: null, revokeStatus: 200, revokeBody: null };
 let fakeServer;
 let fakeBase;
 let dir;
@@ -53,6 +54,22 @@ before(async () => {
         response.writeHead(status, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify(value));
       };
+      if (path === '/tiktok-token') {
+        return json(
+          fake.tiktokStatus,
+          fake.tiktokBody ?? {
+            access_token: 'act.tk',
+            expires_in: 86400,
+            open_id: 'open-1',
+            refresh_expires_in: 31536000,
+            refresh_token: 'rft.tk',
+            scope: 'user.info.basic',
+            token_type: 'Bearer',
+            log_id: 'not for the app',
+          },
+        );
+      }
+      if (path === '/tiktok-revoke') return json(fake.revokeStatus, fake.revokeBody ?? {});
       if (path === '/google-token') {
         return json(
           fake.googleStatus,
@@ -156,7 +173,7 @@ before(async () => {
 
 after(() => fakeServer.close());
 
-async function start({ tiktok, withGoogle = true } = {}) {
+async function start({ tiktok, withGoogle = true, withTikTokLogin = true } = {}) {
   dir = mkdtempSync(join(tmpdir(), 'relay-'));
   store = new Store(dir, KEY);
   const kick = new Kick({
@@ -177,7 +194,19 @@ async function start({ tiktok, withGoogle = true } = {}) {
         .add('g-client', new Google({ clientId: 'g-client', clientSecret: 'g-secret', tokenUrl: `${fakeBase}/google-token` }))
         .add('g-client-2', new Google({ clientId: 'g-client-2', clientSecret: 'g-secret-2', tokenUrl: `${fakeBase}/google-token` }))
     : null;
-  relay = createRelay({ publicUrl: base, store, kick, rooms: tiktok ?? null, google });
+  const tiktokApp = (clientKey, clientSecret) =>
+    new TikTokLogin({
+      clientKey,
+      clientSecret,
+      tokenUrl: `${fakeBase}/tiktok-token`,
+      revokeUrl: `${fakeBase}/tiktok-revoke`,
+    });
+  const tiktokLogin = withTikTokLogin
+    ? new TikTokLogins()
+        .add('tk-1', tiktokApp('tk-1', 'tk-secret'))
+        .add('tk-2', tiktokApp('tk-2', 'tk-secret-2'))
+    : null;
+  relay = createRelay({ publicUrl: base, store, kick, rooms: tiktok ?? null, google, tiktokLogin });
   await new Promise((resolve) => relay.server.listen(port, '127.0.0.1', resolve));
 }
 
@@ -200,6 +229,10 @@ afterEach(async () => {
     googleStatus: 200,
     googleBody: null,
     rewardStatus: 200,
+    tiktokStatus: 200,
+    tiktokBody: null,
+    revokeStatus: 200,
+    revokeBody: null,
   });
 });
 
@@ -1039,6 +1072,130 @@ test('google: without its values it says so', async () => {
   await start({ withGoogle: false });
   assert.equal((await toGoogle('token', googleSignIn)).status, 503);
   assert.equal((await (await fetch(`${base}/health`)).json()).google, false);
+});
+
+const toTikTok = (path, body, headers = {}) =>
+  fetch(`${base}/tiktok/${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+const tiktokSignIn = {
+  code: 'the-code',
+  code_verifier: 'v'.repeat(43),
+  redirect_uri: 'http://127.0.0.1:5555/callback/',
+};
+
+test('tiktok: the secret is added here and only the tokens go back', async () => {
+  await start();
+  const answer = await toTikTok('token', tiktokSignIn);
+  assert.equal(answer.status, 200);
+  assert.deepEqual(await answer.json(), {
+    access_token: 'act.tk',
+    expires_in: 86400,
+    refresh_token: 'rft.tk',
+    refresh_expires_in: 31536000,
+    open_id: 'open-1',
+  });
+  const asked = fake.requests.at(-1);
+  assert.equal(asked.path, '/tiktok-token');
+  const sent = new URLSearchParams(asked.body);
+  assert.equal(sent.get('client_key'), 'tk-1');
+  assert.equal(sent.get('client_secret'), 'tk-secret');
+  assert.equal(sent.get('code'), 'the-code');
+  assert.equal(sent.get('code_verifier'), 'v'.repeat(43));
+  assert.equal(sent.get('redirect_uri'), 'http://127.0.0.1:5555/callback/');
+  assert.equal(sent.get('grant_type'), 'authorization_code');
+});
+
+test('tiktok: a refresh works without a session on this server', async () => {
+  await start();
+  const answer = await toTikTok('refresh', { refresh_token: 'rft.old' });
+  assert.equal(answer.status, 200);
+  assert.equal((await answer.json()).refresh_token, 'rft.tk');
+  const sent = new URLSearchParams(fake.requests.at(-1).body);
+  assert.equal(sent.get('grant_type'), 'refresh_token');
+  assert.equal(sent.get('refresh_token'), 'rft.old');
+  assert.equal(sent.get('client_secret'), 'tk-secret');
+});
+
+test('tiktok: signing out revokes at TikTok with the secret', async () => {
+  await start();
+  const answer = await toTikTok('revoke', { token: 'act.tk', client_key: 'tk-2' });
+  assert.equal(answer.status, 200);
+  assert.deepEqual(await answer.json(), {});
+  const asked = fake.requests.at(-1);
+  assert.equal(asked.path, '/tiktok-revoke');
+  const sent = new URLSearchParams(asked.body);
+  assert.equal(sent.get('token'), 'act.tk');
+  assert.equal(sent.get('client_key'), 'tk-2');
+  assert.equal(sent.get('client_secret'), 'tk-secret-2');
+
+  fake.revokeStatus = 400;
+  fake.revokeBody = { error: 'invalid_request', error_description: 'x', log_id: 'y' };
+  const refused = await toTikTok('revoke', { token: 'act.tk' });
+  assert.equal(refused.status, 502);
+  assert.deepEqual(await refused.json(), { error: 'failed' });
+});
+
+test('tiktok: an app that names the second client signs in and refreshes with it', async () => {
+  await start();
+  assert.equal((await toTikTok('token', { ...tiktokSignIn, client_key: 'tk-2' })).status, 200);
+  let sent = new URLSearchParams(fake.requests.at(-1).body);
+  assert.equal(sent.get('client_key'), 'tk-2');
+  assert.equal(sent.get('client_secret'), 'tk-secret-2');
+  assert.equal((await toTikTok('refresh', { refresh_token: 'r', client_key: 'tk-2' })).status, 200);
+  sent = new URLSearchParams(fake.requests.at(-1).body);
+  assert.equal(sent.get('client_secret'), 'tk-secret-2');
+  // Apps that name an unknown client (or none) keep the first one.
+  assert.equal((await toTikTok('refresh', { refresh_token: 'r', client_key: 'nope' })).status, 200);
+  sent = new URLSearchParams(fake.requests.at(-1).body);
+  assert.equal(sent.get('client_key'), 'tk-1');
+});
+
+test('tiktok: only a sign-in that is really gone says so', async () => {
+  await start();
+  fake.tiktokStatus = 400;
+  fake.tiktokBody = { error: 'invalid_grant', error_description: 'expired', log_id: '1' };
+  const gone = await toTikTok('refresh', { refresh_token: 'old' });
+  assert.equal(gone.status, 400);
+  assert.deepEqual(await gone.json(), { error: 'invalid_grant' });
+
+  // A wrong secret here is not the person's fault, and must not sign them out.
+  fake.tiktokStatus = 401;
+  fake.tiktokBody = { error: 'invalid_client', error_description: 'details', log_id: '2' };
+  const ours = await toTikTok('token', tiktokSignIn);
+  assert.equal(ours.status, 502);
+  assert.deepEqual(await ours.json(), { error: 'failed' });
+
+  // An error in a 200 is an error too.
+  fake.tiktokStatus = 200;
+  fake.tiktokBody = { error: 'server_error', access_token: 'act.half' };
+  const odd = await toTikTok('token', tiktokSignIn);
+  assert.equal(odd.status, 502);
+});
+
+test('tiktok: nothing goes to TikTok from a bad request', async () => {
+  await start();
+  const before = fake.requests.length;
+  const bad = [
+    ['token', { ...tiktokSignIn, redirect_uri: 'https://evil.example/callback/' }],
+    ['token', { ...tiktokSignIn, redirect_uri: 'http://127.0.0.1:5555/' }],
+    ['token', { ...tiktokSignIn, redirect_uri: 'http://127.0.0.1:5555/callback/x' }],
+    ['token', { ...tiktokSignIn, code: '' }],
+    ['token', { ...tiktokSignIn, code_verifier: 'short' }],
+    ['token', null],
+    ['refresh', { refresh_token: 7 }],
+    ['revoke', {}],
+  ];
+  for (const [path, body] of bad) {
+    assert.equal((await toTikTok(path, body)).status, 400, `${path} ${JSON.stringify(body)}`);
+  }
+  assert.equal(fake.requests.length, before);
+});
+
+test('tiktok: without its values it says so', async () => {
+  await start({ withTikTokLogin: false });
+  assert.equal((await toTikTok('token', tiktokSignIn)).status, 503);
+  assert.equal((await toTikTok('refresh', { refresh_token: 'r' })).status, 503);
+  assert.equal((await toTikTok('revoke', { token: 't' })).status, 503);
+  assert.equal((await (await fetch(`${base}/health`)).json()).tiktokLogin, false);
 });
 
 const REWARD = '01KBHE7RZNHB0SKDV1H86CD4F3';

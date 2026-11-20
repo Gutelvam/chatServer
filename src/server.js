@@ -34,6 +34,15 @@ export function isLoopback(url) {
   return found !== null && Number(found[1]) <= 65535;
 }
 
+/** TikTok's desktop sign-in comes back to `/callback/` on a port of this computer. */
+export function isTikTokRedirect(url) {
+  const found = /^http:\/\/127\.0\.0\.1:([1-9]\d{0,4})\/callback\/$/.exec(url ?? '');
+  return found !== null && Number(found[1]) <= 65535;
+}
+
+/** RFC 7636's verifier: 43 to 128 unreserved letters. */
+const isVerifier = (value) => /^[A-Za-z0-9._~-]{43,128}$/.test(value ?? '');
+
 /** An app's own PKCE challenge for the relay's code: S256 of a verifier, in base64url. */
 const isChallenge = (value) => /^[A-Za-z0-9_-]{43}$/.test(value ?? '');
 
@@ -87,7 +96,7 @@ const bearer = (request) => {
 const addressOf = (request) =>
   request.headers['fly-client-ip'] ?? request.socket.remoteAddress ?? 'unknown';
 
-export function createRelay({ publicUrl, store, kick, rooms, google = null }) {
+export function createRelay({ publicUrl, store, kick, rooms, google = null, tiktokLogin = null }) {
   const logins = new Map();
   const handoffs = new Map();
   const listeners = new Map();
@@ -431,6 +440,33 @@ export function createRelay({ publicUrl, store, kick, rooms, google = null }) {
     reply(response, answer.status, answer.body);
   };
 
+  /** The steps of TikTok's sign-in that need the secret. What passes through is not kept. */
+  const tiktokToken = async (request, response, route) => {
+    if (limited(request)) return reply(response, 429, { error: 'too many attempts' });
+    const body = (await readJson(request)) ?? {};
+    const text = (value) => typeof value === 'string' && value.length > 0 && value.length <= 4096;
+    // The app names the client key it signed in with; a refresh must use that same client.
+    const client = tiktokLogin.for(body.client_key);
+    let answer;
+    if (route === 'POST /tiktok/refresh') {
+      if (!text(body.refresh_token)) return reply(response, 400, { error: 'bad request' });
+      answer = await client.refresh(body.refresh_token);
+    } else if (route === 'POST /tiktok/revoke') {
+      if (!text(body.token)) return reply(response, 400, { error: 'bad request' });
+      answer = await client.revoke(body.token);
+    } else {
+      if (!text(body.code) || !isVerifier(body.code_verifier) || !isTikTokRedirect(body.redirect_uri)) {
+        return reply(response, 400, { error: 'bad request' });
+      }
+      answer = await client.exchange({
+        code: body.code,
+        verifier: body.code_verifier,
+        redirect: body.redirect_uri,
+      });
+    }
+    reply(response, answer.status, answer.body);
+  };
+
   /** Signing out: this app forgets it, and Kick stops sending when no other app needs it. */
   const signOut = async (response, session) => {
     if (store.othersOf(session.userId, session.hash) === 0) {
@@ -454,7 +490,12 @@ export function createRelay({ publicUrl, store, kick, rooms, google = null }) {
         tiktok: Boolean(rooms),
         kick: Boolean(kick),
         google: Boolean(google),
+        tiktokLogin: Boolean(tiktokLogin),
       });
+    }
+    if (['POST /tiktok/token', 'POST /tiktok/refresh', 'POST /tiktok/revoke'].includes(route)) {
+      if (!tiktokLogin) return reply(response, 503, { error: 'tiktok sign-in is not set up' });
+      return await tiktokToken(request, response, route);
     }
     if (route === 'POST /google/token' || route === 'POST /google/refresh') {
       if (!google) return reply(response, 503, { error: 'google is not set up' });
