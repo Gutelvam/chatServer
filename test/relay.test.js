@@ -28,7 +28,7 @@ function sign(id, timestamp, body) {
 }
 
 /** What Kick was asked, and how it answers. */
-const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7, channelStatus: 204, moderationStatus: 200, onAir: false, googleStatus: 200, googleBody: null, rewardStatus: 200, tiktokStatus: 200, tiktokBody: null, revokeStatus: 200, revokeBody: null };
+const fake = { requests: [], tokenStatus: 200, tokenBody: {}, usersStatus: 200, refuseEvent: null, expiresIn: 3600, user: 7, channelStatus: 204, moderationStatus: 200, onAir: false, googleStatus: 200, googleBody: null, rewardStatus: 200, tiktokStatus: 200, tiktokBody: null, revokeStatus: 200, revokeBody: null, botChat: 'sent' };
 let fakeServer;
 let fakeBase;
 let dir;
@@ -162,7 +162,14 @@ before(async () => {
         response.writeHead(fake.moderationStatus === 200 ? 204 : fake.moderationStatus);
         return response.end();
       }
-      if (path === '/public/v1/chat') return json(200, { data: { is_sent: true } });
+      if (path === '/public/v1/chat') {
+        if (JSON.parse(body).type === 'bot') {
+          if (fake.botChat === 'refused') return json(403, { message: 'bot not allowed' });
+          if (fake.botChat === 'expired') return json(401, { message: 'expired' });
+          if (fake.botChat === 'dropped') return json(200, { data: { is_sent: false } });
+        }
+        return json(200, { data: { is_sent: true, message_id: 'm1' } });
+      }
       if (path === '/public/v1/public-key') return json(200, { data: { public_key: publicPem } });
       json(404, {});
     });
@@ -223,6 +230,7 @@ afterEach(async () => {
     refuseEvent: null,
     expiresIn: 3600,
     user: 7,
+    botChat: 'sent',
     channelStatus: 204,
     moderationStatus: 200,
     onAir: false,
@@ -1268,4 +1276,50 @@ test('redemptions are accepted or rejected in small groups of real ids', async (
   assert.deepEqual(JSON.parse(sent.body), { ids: [REWARD] });
   assert.equal((await rewardCall(session, 'POST', '/redemptions', { accept: true, ids: [] })).status, 400);
   assert.equal((await rewardCall(session, 'POST', '/redemptions', { ids: [REWARD] })).status, 400);
+});
+
+test('the bot sends as the app, and falls back to the account when Kick refuses or drops it', async () => {
+  await start();
+  const session = await signIn();
+  const send = (body) =>
+    fetch(`${base}/kick/chat`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session}` },
+      body: JSON.stringify(body),
+    });
+  const chats = () => fake.requests.filter((r) => r.path === '/public/v1/chat').map((r) => JSON.parse(r.body));
+
+  let answer = await send({ content: 'oi', as: 'bot' });
+  assert.equal(answer.status, 200);
+  assert.deepEqual(await answer.json(), { sent_as: 'bot' });
+  assert.deepEqual(chats(), [{ type: 'bot', content: 'oi' }], 'no broadcaster id: Kick uses the token channel');
+
+  for (const mode of ['refused', 'dropped']) {
+    fake.requests = [];
+    fake.botChat = mode;
+    answer = await send({ content: 'oi', as: 'bot' });
+    assert.equal(answer.status, 200, mode);
+    assert.deepEqual(await answer.json(), { sent_as: 'user' }, mode);
+    assert.deepEqual(
+      chats().map((c) => c.type),
+      ['bot', 'user'],
+      mode,
+    );
+    assert.equal(chats()[1].broadcaster_user_id, 7);
+  }
+
+  // A 401 on the bot type alone must not sign the person out: the account still sends.
+  fake.requests = [];
+  fake.botChat = 'expired';
+  answer = await send({ content: 'oi', as: 'bot' });
+  assert.equal(answer.status, 200);
+  assert.deepEqual(await answer.json(), { sent_as: 'user' });
+  assert.deepEqual(chats().map((c) => c.type), ['bot', 'user']);
+
+  // Older apps (no "as") keep sending as the person.
+  fake.requests = [];
+  fake.botChat = 'sent';
+  answer = await send({ content: 'oi' });
+  assert.deepEqual(await answer.json(), { sent_as: 'user' });
+  assert.deepEqual(chats().map((c) => c.type), ['user']);
 });
