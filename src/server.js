@@ -261,14 +261,32 @@ export function createRelay({ publicUrl, store, kick, rooms, google = null, tikt
     reply(response, 200, {});
   };
 
+  /**
+   * `as: "bot"` (apps from the EZ Stream bot on) posts as the app's bot account and, when Kick
+   * refuses or drops that, as the person instead, so the message is never lost. Without `as` it is
+   * the person, as older apps expect. `sent_as` says which one went out.
+   */
   const sendChat = async (request, response, session) => {
-    const { content } = await readJson(request);
+    const { content, as } = await readJson(request);
     const text = String(content ?? '')
       .trim()
       .slice(0, MAX_MESSAGE_LETTERS);
     if (!text) return reply(response, 400, { error: 'nothing to send' });
-    await kick.sendChat(await freshAccess(session), session.userId, text);
-    reply(response, 200, {});
+    const access = await freshAccess(session);
+    if (as === 'bot') {
+      try {
+        const sent = await kick.sendChat(access, session.userId, text, 'bot');
+        if (sent.is_sent !== false) return reply(response, 200, { sent_as: 'bot' });
+        console.error('kick bot message not sent: falling back to the account');
+      } catch (error) {
+        // Even a 401 is retried as the person: if the bot type alone is refused that way, signing
+        // everyone out would be far worse. A sign-in that is really gone fails again just below.
+        if (!(error instanceof KickError)) throw error;
+        console.error(`kick bot message refused (${error.status}): falling back to the account`);
+      }
+    }
+    await kick.sendChat(access, session.userId, text, 'user');
+    reply(response, 200, { sent_as: 'user' });
   };
 
   const searchCategories = async (url, response, session) => {

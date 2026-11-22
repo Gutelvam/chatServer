@@ -218,11 +218,21 @@ export class Kick {
     await this.#api(`/public/v1/events/subscriptions?${query}`, access, { method: 'DELETE' });
   }
 
-  sendChat(access, userId, content) {
-    return this.#api('/public/v1/chat', access, {
+  /**
+   * Posts in the signed-in account's own channel. `as` "bot" posts as the app's bot account (Kick
+   * ignores broadcaster_user_id then and always uses the channel the token belongs to); "user" as the
+   * person. Resolves to Kick's `data` ({ is_sent, message_id }).
+   */
+  async sendChat(access, userId, content, as = 'user') {
+    const body =
+      as === 'bot'
+        ? { type: 'bot', content }
+        : { type: 'user', broadcaster_user_id: userId, content };
+    const answer = await this.#api('/public/v1/chat', access, {
       method: 'POST',
-      body: JSON.stringify({ type: 'user', broadcaster_user_id: userId, content }),
+      body: JSON.stringify(body),
     });
+    return answer?.data ?? {};
   }
 
   /** Games and categories like this name. Kick's only search by words, though marked as old. */

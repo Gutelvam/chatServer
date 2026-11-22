@@ -58,7 +58,7 @@ A criação da app no Kick e os limites de cada plataforma estão em `docs/platf
 | `GET /kick/callback` | Regresso do Kick |
 | `POST /kick/claim` | A aplicação troca o código de uso único (2 min) pela sessão (`{code, code_verifier?}`). Sessões sem uso por 90 dias expiram |
 | `POST /kick/webhook` | Eventos do Kick |
-| `POST /kick/chat` | Enviar uma mensagem, com a sessão |
+| `POST /kick/chat` | Enviar uma mensagem no próprio canal, com a sessão (`{content, as?}`). Com `as: "bot"` sai como a conta bot da app do Kick (`type: "bot"` da API oficial); se o Kick recusar ou não a entregar, sai como a pessoa. Sem `as`, sai como a pessoa (apps antigas). A resposta diz `sent_as`: `bot` ou `user` |
 | `DELETE /kick/session` | Terminar sessão |
 | `POST /google/token` | Troca o código do login da Google por tokens, juntando o segredo. Não guarda nada |
 | `POST /google/refresh` | Renova o acesso ao YouTube, da mesma forma |
@@ -67,6 +67,10 @@ A criação da app no Kick e os limites de cada plataforma estão em `docs/platf
 | `POST /tiktok/revoke` | Termina o login no TikTok (`{token, client_key?}`) |
 | WS `/kick/stream` | Mensagens e eventos da conta, com a sessão |
 | WS `/tiktok/stream?username=` | Mensagens e eventos de um canal do TikTok |
+
+## Bot do chat
+
+As mensagens que a aplicação envia no Kick (respostas a comandos, agradecimentos, a mensagem de divulgação) saem como a conta bot da app do Kick, usando a sessão de quem fez login e `type: "bot"` em `POST /public/v1/chat`. O Kick ignora o canal pedido nesse caso e publica sempre no canal dono da sessão, por isso a mensagem só pode ir para o canal de quem a envia. O login já pede `chat:write`, que cobre as duas formas: ninguém precisa de entrar outra vez.
 
 ## Testes
 
